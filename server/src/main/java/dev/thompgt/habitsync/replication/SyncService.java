@@ -1,19 +1,19 @@
 package dev.thompgt.habitsync.replication;
 
 import dev.thompgt.habitsync.account.AccountRepository;
-import dev.thompgt.habitsync.replication.dto.SyncChange;
 import dev.thompgt.habitsync.replication.dto.SyncDtos.SyncChangeEnvelope;
 import dev.thompgt.habitsync.replication.dto.SyncDtos.SyncRequest;
 import dev.thompgt.habitsync.replication.dto.SyncDtos.SyncResponse;
 import dev.thompgt.habitsync.security.AuthenticatedUser;
 import dev.thompgt.habitsync.sync.Change;
+import dev.thompgt.habitsync.sync.ChangeCodec;
 import dev.thompgt.habitsync.sync.EntityRecord;
 import dev.thompgt.habitsync.sync.EntityType;
 import dev.thompgt.habitsync.sync.FieldValue;
 import dev.thompgt.habitsync.sync.Hlc;
 import dev.thompgt.habitsync.sync.MergeEngine;
-import dev.thompgt.habitsync.sync.OpKind;
 import dev.thompgt.habitsync.sync.Resolution;
+import dev.thompgt.habitsync.sync.WireChange;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -88,25 +88,36 @@ public class SyncService {
 
     // ------------------------------------------------------------------ push
 
-    private List<UUID> push(UUID userId, String nodeId, List<SyncChange> ops) {
+    private List<UUID> push(UUID userId, String nodeId, List<WireChange> ops) {
         if (ops.isEmpty()) {
             return List.of();
         }
 
+        // Decode every op before touching the database. Validation used to happen at the
+        // controller boundary via bean-validation annotations; now that the wire type is
+        // shared with the client, ChangeCodec is the single arbiter of what is well-formed
+        // -- so the rejection has to be pulled forward explicitly. A batch is all-or-
+        // nothing: one malformed op fails the request rather than committing its
+        // well-formed neighbours and leaving the client to work out which landed.
+        List<Change> decoded = ops.stream().map(ChangeCodec::decode).toList();
+
         // Idempotency: ops this user has already had accepted are reported as applied but
         // not re-merged or re-logged. This is what makes a timed-out push safe to replay.
         Set<UUID> alreadyApplied =
-                changeLog.findAlreadyApplied(userId, ops.stream().map(SyncChange::opId).toList());
+                changeLog.findAlreadyApplied(userId, ops.stream().map(WireChange::opId).toList());
 
-        List<SyncChange> fresh = new ArrayList<>();
+        List<WireChange> fresh = new ArrayList<>();
+        List<Change> freshDecoded = new ArrayList<>();
         List<UUID> acknowledged = new ArrayList<>();
         Set<UUID> seenInThisBatch = new java.util.HashSet<>();
 
-        for (SyncChange op : ops) {
+        for (int i = 0; i < ops.size(); i++) {
+            WireChange op = ops.get(i);
             acknowledged.add(op.opId());
             // A client can repeat an op id within one request; accept it once.
             if (!alreadyApplied.contains(op.opId()) && seenInThisBatch.add(op.opId())) {
                 fresh.add(op);
+                freshDecoded.add(decoded.get(i));
             }
         }
 
@@ -119,16 +130,17 @@ public class SyncService {
         long startSeq = changeLog.allocateSequenceRange(userId, fresh.size());
         changeLog.append(userId, startSeq, fresh, nodeId);
 
-        for (SyncChange op : fresh) {
-            applyToEntityState(userId, op);
+        // The log is the record of what the client said; entity state is the record of
+        // what it means. Both are written here, in that order, inside one transaction.
+        for (Change change : freshDecoded) {
+            applyToEntityState(userId, change);
         }
 
         return acknowledged;
     }
 
-    /** Merges one wire change into stored entity state using the shared engine. */
-    private void applyToEntityState(UUID userId, SyncChange op) {
-        Change change = toCoreChange(op);
+    /** Merges one change into stored entity state using the shared engine. */
+    private void applyToEntityState(UUID userId, Change change) {
         String type = change.entityType().name();
 
         EntityRecord current = entities
@@ -211,36 +223,6 @@ public class SyncService {
     }
 
     // ----------------------------------------------------------- translation
-
-    private static Change toCoreChange(SyncChange op) {
-        EntityType type = parseEnum(EntityType.class, op.entityType(), "entityType");
-        OpKind kind = parseEnum(OpKind.class, op.kind(), "kind");
-        Hlc hlc;
-        try {
-            hlc = Hlc.parse(op.hlc());
-        } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("Malformed hlc on op " + op.opId() + ": " + op.hlc(), e);
-        }
-
-        Map<String, FieldValue> fields = new LinkedHashMap<>();
-        op.fields().forEach((name, value) -> fields.put(name, FieldValue.of(value)));
-
-        return new Change(op.opId(), type, op.entityId(), kind, hlc, fields);
-    }
-
-    /**
-     * Unknown enum values are a 400, not a 500.
-     *
-     * <p>A newer client sending an entity type this server version does not know is a
-     * protocol mismatch the client can act on, not a server fault.
-     */
-    private static <E extends Enum<E>> E parseEnum(Class<E> type, String raw, String what) {
-        try {
-            return Enum.valueOf(type, raw);
-        } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("Unknown %s: %s".formatted(what, raw), e);
-        }
-    }
 
     private static EntityRecord toCoreRecord(
             EntityType type, UUID id, EntityRepository.StoredEntity stored) {

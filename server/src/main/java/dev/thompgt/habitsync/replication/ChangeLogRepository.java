@@ -2,7 +2,7 @@ package dev.thompgt.habitsync.replication;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import dev.thompgt.habitsync.replication.dto.SyncChange;
+import dev.thompgt.habitsync.sync.WireChange;
 import java.sql.PreparedStatement;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -78,7 +78,7 @@ public class ChangeLogRepository {
      *
      * <p>Batched, and ordered so that the nth change takes {@code startSeq + n}.
      */
-    public void append(UUID userId, long startSeq, List<SyncChange> changes, String originNode) {
+    public void append(UUID userId, long startSeq, List<WireChange> changes, String originNode) {
         jdbc.batchUpdate(
                 """
                 INSERT INTO change_log
@@ -88,7 +88,7 @@ public class ChangeLogRepository {
                 new org.springframework.jdbc.core.BatchPreparedStatementSetter() {
                     @Override
                     public void setValues(PreparedStatement ps, int i) throws java.sql.SQLException {
-                        SyncChange change = changes.get(i);
+                        WireChange change = changes.get(i);
                         ps.setObject(1, userId);
                         ps.setLong(2, startSeq + i);
                         ps.setObject(3, change.opId());
@@ -160,7 +160,7 @@ public class ChangeLogRepository {
     private RowMapper<LoggedChange> changeMapper() {
         return (rs, rowNum) -> new LoggedChange(
                 rs.getLong("server_seq"),
-                new SyncChange(
+                new WireChange(
                         rs.getObject("op_id", UUID.class),
                         rs.getString("entity_type"),
                         rs.getObject("entity_id", UUID.class),
@@ -196,5 +196,5 @@ public class ChangeLogRepository {
     }
 
     /** A change as stored, paired with the sequence the server assigned it. */
-    public record LoggedChange(long serverSeq, SyncChange change, String originNode) {}
+    public record LoggedChange(long serverSeq, WireChange change, String originNode) {}
 }

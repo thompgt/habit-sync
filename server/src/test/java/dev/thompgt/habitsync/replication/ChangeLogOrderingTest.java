@@ -4,7 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import dev.thompgt.habitsync.auth.AuthResult;
 import dev.thompgt.habitsync.auth.AuthService;
-import dev.thompgt.habitsync.replication.dto.SyncChange;
+import dev.thompgt.habitsync.sync.WireChange;
 import dev.thompgt.habitsync.support.AbstractIntegrationTest;
 import java.util.ArrayList;
 import java.util.List;
@@ -46,8 +46,8 @@ class ChangeLogOrderingTest extends AbstractIntegrationTest {
         return account.userId();
     }
 
-    private static SyncChange change() {
-        return new SyncChange(
+    private static WireChange change() {
+        return new WireChange(
                 UUID.randomUUID(),
                 "HABIT",
                 UUID.randomUUID(),

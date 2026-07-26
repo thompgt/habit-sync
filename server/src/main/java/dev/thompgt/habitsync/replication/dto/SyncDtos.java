@@ -1,6 +1,6 @@
 package dev.thompgt.habitsync.replication.dto;
 
-import jakarta.validation.Valid;
+import dev.thompgt.habitsync.sync.WireChange;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import java.util.List;
@@ -19,12 +19,14 @@ public final class SyncDtos {
      * @param sinceSeq the client's watermark: the highest {@code server_seq} it has
      *                 durably applied
      * @param ops      locally originated changes awaiting acknowledgement. May be empty,
-     *                 which makes this a pure pull.
+     *                 which makes this a pure pull. Validated by {@code ChangeCodec} rather
+     *                 than by bean-validation annotations, so that both ends of the
+     *                 protocol accept and reject exactly the same payloads.
      */
     public record SyncRequest(
             @Min(0) long sinceSeq,
             @NotNull Integer protocolVersion,
-            @Valid List<@Valid SyncChange> ops) {
+            List<WireChange> ops) {
 
         public SyncRequest {
             ops = ops == null ? List.of() : List.copyOf(ops);
@@ -53,5 +55,5 @@ public final class SyncDtos {
             int protocolVersion) {}
 
     /** A change paired with the sequence the server assigned it. */
-    public record SyncChangeEnvelope(long serverSeq, SyncChange change) {}
+    public record SyncChangeEnvelope(long serverSeq, WireChange change) {}
 }

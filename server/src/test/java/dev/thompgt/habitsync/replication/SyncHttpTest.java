@@ -7,7 +7,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thompgt.habitsync.auth.AuthDtos;
-import dev.thompgt.habitsync.replication.dto.SyncChange;
+import dev.thompgt.habitsync.sync.WireChange;
 import dev.thompgt.habitsync.replication.dto.SyncDtos;
 import dev.thompgt.habitsync.replication.dto.SyncDtos.SyncRequest;
 import dev.thompgt.habitsync.support.AbstractIntegrationTest;
@@ -68,7 +68,7 @@ class SyncHttpTest extends AbstractIntegrationTest {
         cleared.put("colour", null);
 
         sync(token, new SyncRequest(0, SyncDtos.PROTOCOL_VERSION, List.of(
-                new SyncChange(UUID.randomUUID(), "HABIT", habit, "UPSERT", "2000:0:a", cleared))));
+                new WireChange(UUID.randomUUID(), "HABIT", habit, "UPSERT", "2000:0:a", cleared))));
 
         JsonNode response = sync(token, new SyncRequest(0, SyncDtos.PROTOCOL_VERSION, List.of()));
         JsonNode fields = response.get("changes").get(0).get("change").get("fields");
@@ -108,7 +108,7 @@ class SyncHttpTest extends AbstractIntegrationTest {
                         .content(json.writeValueAsString(new SyncRequest(
                                 0,
                                 SyncDtos.PROTOCOL_VERSION,
-                                List.of(new SyncChange(
+                                List.of(new WireChange(
                                         UUID.randomUUID(),
                                         "NOT_A_REAL_TYPE",
                                         UUID.randomUUID(),
@@ -128,7 +128,7 @@ class SyncHttpTest extends AbstractIntegrationTest {
                         .content(json.writeValueAsString(new SyncRequest(
                                 0,
                                 SyncDtos.PROTOCOL_VERSION,
-                                List.of(new SyncChange(
+                                List.of(new WireChange(
                                         UUID.randomUUID(),
                                         "HABIT",
                                         UUID.randomUUID(),
@@ -144,7 +144,7 @@ class SyncHttpTest extends AbstractIntegrationTest {
         UUID habit = UUID.randomUUID();
 
         sync(token, new SyncRequest(0, SyncDtos.PROTOCOL_VERSION, List.of(
-                new SyncChange(UUID.randomUUID(), "HABIT", habit, "UPSERT", "1000:0:a", Map.of("name", "Run")))));
+                new WireChange(UUID.randomUUID(), "HABIT", habit, "UPSERT", "1000:0:a", Map.of("name", "Run")))));
 
         MvcResult result = mvc.perform(get("/v1/sync?sinceSeq=0").header("Authorization", "Bearer " + token))
                 .andReturn();

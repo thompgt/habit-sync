@@ -4,7 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import dev.thompgt.habitsync.auth.AuthResult;
 import dev.thompgt.habitsync.auth.AuthService;
-import dev.thompgt.habitsync.replication.dto.SyncChange;
+import dev.thompgt.habitsync.sync.WireChange;
 import dev.thompgt.habitsync.replication.dto.SyncDtos;
 import dev.thompgt.habitsync.replication.dto.SyncDtos.SyncRequest;
 import dev.thompgt.habitsync.replication.dto.SyncDtos.SyncResponse;
@@ -41,15 +41,15 @@ class SyncProtocolTest extends AbstractIntegrationTest {
                 new AuthenticatedUser(second.userId(), second.deviceId()));
     }
 
-    private static SyncChange upsert(UUID entityId, String hlc, Map<String, String> fields) {
-        return new SyncChange(UUID.randomUUID(), "HABIT", entityId, "UPSERT", hlc, fields);
+    private static WireChange upsert(UUID entityId, String hlc, Map<String, String> fields) {
+        return new WireChange(UUID.randomUUID(), "HABIT", entityId, "UPSERT", hlc, fields);
     }
 
-    private static SyncChange delete(UUID entityId, String hlc) {
-        return new SyncChange(UUID.randomUUID(), "HABIT", entityId, "DELETE", hlc, Map.of());
+    private static WireChange delete(UUID entityId, String hlc) {
+        return new WireChange(UUID.randomUUID(), "HABIT", entityId, "DELETE", hlc, Map.of());
     }
 
-    private SyncResponse push(AuthenticatedUser device, long sinceSeq, SyncChange... ops) {
+    private SyncResponse push(AuthenticatedUser device, long sinceSeq, WireChange... ops) {
         return syncService.sync(
                 device, new SyncRequest(sinceSeq, SyncDtos.PROTOCOL_VERSION, List.of(ops)));
     }
@@ -76,7 +76,7 @@ class SyncProtocolTest extends AbstractIntegrationTest {
     @DisplayName("replaying a push is a no-op — this is what makes a timed-out request safe to retry")
     void pushIsIdempotent() {
         Account account = twoDeviceAccount();
-        SyncChange op = upsert(UUID.randomUUID(), "1000:0:a", Map.of("name", "Run"));
+        WireChange op = upsert(UUID.randomUUID(), "1000:0:a", Map.of("name", "Run"));
 
         SyncResponse first = push(account.deviceA(), 0, op);
         SyncResponse replay = push(account.deviceA(), 0, op);
@@ -91,7 +91,7 @@ class SyncProtocolTest extends AbstractIntegrationTest {
     @Test
     void duplicateOpIdsWithinOneRequestAreAppliedOnce() {
         Account account = twoDeviceAccount();
-        SyncChange op = upsert(UUID.randomUUID(), "1000:0:a", Map.of("name", "Run"));
+        WireChange op = upsert(UUID.randomUUID(), "1000:0:a", Map.of("name", "Run"));
 
         push(account.deviceA(), 0, op, op);
 
