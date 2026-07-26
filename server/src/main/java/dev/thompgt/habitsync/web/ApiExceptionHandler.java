@@ -1,6 +1,7 @@
 package dev.thompgt.habitsync.web;
 
 import dev.thompgt.habitsync.auth.AuthenticationFailedException;
+import dev.thompgt.habitsync.sync.ClockDriftException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.slf4j.Logger;
@@ -41,6 +42,25 @@ public class ApiExceptionHandler {
         log.info("Rejected malformed request: {}", e.getMessage());
         return ResponseEntity.badRequest()
                 .body(Map.of("error", "bad_request", "message", String.valueOf(e.getMessage())));
+    }
+
+    /**
+     * A push carrying a timestamp implausibly far ahead of server time (ADR-001).
+     *
+     * <p>Given its own error code rather than folded into {@code bad_request} because the
+     * remedy is unlike any other 400: nothing about the request is malformed, and the fix is
+     * to correct the device's wall clock. A client that cannot distinguish this case can
+     * only tell the user "sync failed", which is precisely the wrong instruction.
+     */
+    @ExceptionHandler(ClockDriftException.class)
+    public ResponseEntity<Map<String, Object>> handleClockDrift(ClockDriftException e) {
+        log.warn("Rejected push for clock drift: {}", e.getMessage());
+        return ResponseEntity.badRequest()
+                .body(Map.of(
+                        "error", "clock_drift",
+                        "message", "This device's clock is too far ahead of the server's",
+                        "serverTimeMillis", e.localMillis(),
+                        "maxDriftMillis", e.maxDriftMillis()));
     }
 
     /** Validation errors are safe to return in detail — they describe the caller's own request. */

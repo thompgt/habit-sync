@@ -1,10 +1,13 @@
 package dev.thompgt.habitsync.replication;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.thompgt.habitsync.auth.AuthResult;
 import dev.thompgt.habitsync.auth.AuthService;
+import dev.thompgt.habitsync.sync.ClockDriftException;
 import dev.thompgt.habitsync.sync.WireChange;
+import java.time.Duration;
 import dev.thompgt.habitsync.replication.dto.SyncDtos;
 import dev.thompgt.habitsync.replication.dto.SyncDtos.SyncRequest;
 import dev.thompgt.habitsync.replication.dto.SyncDtos.SyncResponse;
@@ -217,6 +220,62 @@ class SyncProtocolTest extends AbstractIntegrationTest {
 
         assertThat(latestFieldValues(second, habit)).isEqualTo(latestFieldValues(first, habit));
         assertThat(entityDeleted(second, habit)).isEqualTo(entityDeleted(first, habit));
+    }
+
+    // ------------------------------------------------------- clock plausibility
+
+    @Test
+    @DisplayName("a timestamp years ahead is refused rather than absorbed into the log")
+    void pushWithImplausibleClockIsRejected() {
+        Account account = twoDeviceAccount();
+        long farFuture = System.currentTimeMillis() + Duration.ofDays(365).toMillis();
+
+        assertThatThrownBy(() ->
+                        push(account.deviceA(), 0, upsert(UUID.randomUUID(), farFuture + ":0:device-a", Map.of("name", "Run"))))
+                .isInstanceOf(ClockDriftException.class);
+    }
+
+    @Test
+    @DisplayName("rejecting one op rejects its whole batch, so nothing lands half-applied")
+    void oneSkewedOpFailsTheEntireBatch() {
+        Account account = twoDeviceAccount();
+        UUID honest = UUID.randomUUID();
+        long farFuture = System.currentTimeMillis() + Duration.ofDays(365).toMillis();
+
+        assertThatThrownBy(() -> push(
+                        account.deviceA(),
+                        0,
+                        upsert(honest, "1000:0:device-a", Map.of("name", "Run")),
+                        upsert(UUID.randomUUID(), farFuture + ":0:device-a", Map.of("name", "Skewed"))))
+                .isInstanceOf(ClockDriftException.class);
+
+        // The transaction rolled back whole. A partially-accepted batch would leave the
+        // client unable to say which of its ops it may clear from the outbox.
+        assertThat(pull(account.deviceB(), 0).changes()).isEmpty();
+        assertThat(latestFieldValues(account, honest)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a device back from a long trip offline pushes old timestamps and is not punished")
+    void timestampsFarInThePastAreAccepted() {
+        Account account = twoDeviceAccount();
+        long lastYear = System.currentTimeMillis() - Duration.ofDays(365).toMillis();
+
+        push(account.deviceA(), 0, upsert(UUID.randomUUID(), lastYear + ":0:device-a", Map.of("name", "Run")));
+
+        assertThat(pull(account.deviceB(), 0).changes()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("ordinary jitter inside the tolerance still syncs")
+    void smallSkewIsAbsorbed() {
+        Account account = twoDeviceAccount();
+        long slightlyAhead =
+                System.currentTimeMillis() + SyncService.MAX_CLOCK_DRIFT.toMillis() - Duration.ofSeconds(30).toMillis();
+
+        push(account.deviceA(), 0, upsert(UUID.randomUUID(), slightlyAhead + ":0:device-a", Map.of("name", "Run")));
+
+        assertThat(pull(account.deviceB(), 0).changes()).hasSize(1);
     }
 
     // -------------------------------------------------------------- helpers

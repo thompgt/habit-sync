@@ -7,14 +7,17 @@ import dev.thompgt.habitsync.replication.dto.SyncDtos.SyncResponse;
 import dev.thompgt.habitsync.security.AuthenticatedUser;
 import dev.thompgt.habitsync.sync.Change;
 import dev.thompgt.habitsync.sync.ChangeCodec;
+import dev.thompgt.habitsync.sync.ClockDriftException;
 import dev.thompgt.habitsync.sync.EntityRecord;
 import dev.thompgt.habitsync.sync.EntityType;
 import dev.thompgt.habitsync.sync.FieldValue;
 import dev.thompgt.habitsync.sync.Hlc;
+import dev.thompgt.habitsync.sync.HlcClock;
 import dev.thompgt.habitsync.sync.MergeEngine;
 import dev.thompgt.habitsync.sync.Resolution;
 import dev.thompgt.habitsync.sync.WireChange;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -45,6 +48,15 @@ public class SyncService {
 
     /** Bounded so one client cannot submit an unbounded batch and hold the user's lock. */
     public static final int MAX_OPS_PER_PUSH = 500;
+
+    /**
+     * How far ahead of server time an inbound HLC may claim to be (ADR-001).
+     *
+     * <p>Deliberately the same constant the client enforces in {@link HlcClock#observe}, so
+     * the two ends of the protocol cannot disagree about what counts as plausible. A device
+     * that would refuse a peer's timestamp must not be able to publish that timestamp itself.
+     */
+    public static final Duration MAX_CLOCK_DRIFT = HlcClock.DEFAULT_MAX_DRIFT;
 
     private final ChangeLogRepository changeLog;
     private final EntityRepository entities;
@@ -101,6 +113,8 @@ public class SyncService {
         // well-formed neighbours and leaving the client to work out which landed.
         List<Change> decoded = ops.stream().map(ChangeCodec::decode).toList();
 
+        rejectImplausibleClocks(nodeId, decoded);
+
         // Idempotency: ops this user has already had accepted are reported as applied but
         // not re-merged or re-logged. This is what makes a timed-out push safe to replay.
         Set<UUID> alreadyApplied =
@@ -137,6 +151,47 @@ public class SyncService {
         }
 
         return acknowledged;
+    }
+
+    /**
+     * Refuses a batch carrying a timestamp implausibly far ahead of server time (ADR-001).
+     *
+     * <p>The client already applies this bound in {@link HlcClock#observe}, and that is not
+     * enough. A receiving device's check protects only that device, only against peers it
+     * happens to pull from, and only if it is running our client at all. The server is the
+     * single point every write passes through, and — more to the point — it is the last
+     * point at which a poisoned timestamp can be stopped <em>before it is in the log</em>.
+     * Once appended, every device on the account faces the same two bad options forever:
+     * absorb the skew, and no honest write ever wins another conflict; or reject the page,
+     * and never sync again. Neither is recoverable by the user. Rejecting at the door is.
+     *
+     * <p>Only the upper bound is guarded. A timestamp far in the <em>past</em> is what a
+     * device returning from a fortnight offline legitimately looks like, and it is harmless:
+     * it loses conflicts, which is exactly what it should do.
+     *
+     * <p>All-or-nothing, like the decode above. A partial accept would leave the client to
+     * work out which of its ops landed, and the answer would depend on the server's wall
+     * clock at the instant of the request.
+     *
+     * <p>Known gap: an op already stamped with a bad clock stays in the client's outbox and
+     * will be re-pushed, and re-rejected, even after the device's wall clock is corrected —
+     * fixing the clock does not re-stamp what is already queued. Recovering needs the client
+     * to re-stamp its outbox when a push is refused for drift; that is client work, tracked
+     * separately.
+     */
+    private void rejectImplausibleClocks(String nodeId, List<Change> decoded) {
+        long now = clock.millis();
+        long limit = MAX_CLOCK_DRIFT.toMillis();
+        for (Change change : decoded) {
+            if (change.hlc().physicalMillis() > now + limit) {
+                log.warn(
+                        "Rejecting push from node {}: HLC {} is {} ms ahead of server time",
+                        nodeId,
+                        change.hlc(),
+                        change.hlc().physicalMillis() - now);
+                throw new ClockDriftException(change.hlc(), now, limit);
+            }
+        }
     }
 
     /** Merges one change into stored entity state using the shared engine. */
