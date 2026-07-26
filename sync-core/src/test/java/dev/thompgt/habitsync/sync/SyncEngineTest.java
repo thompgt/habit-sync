@@ -411,6 +411,187 @@ class SyncEngineTest {
     }
 
     @Nested
+    @DisplayName("conflict reporting")
+    class Conflicts {
+
+        /**
+         * The bargain ADR-001 strikes: LWW may discard the user's edit, provided the user
+         * is told. A client that cannot tell is a client that loses data silently.
+         */
+        @Test
+        void namesTheLocalEditThatARemoteWriteOverwrote() throws Exception {
+            deviceA.engine.upsert(EntityType.HABIT, HABIT, "name", FieldValue.of("From A"));
+            deviceA.engine.sync();
+
+            deviceB.time.advance(5_000);
+            deviceB.engine.upsert(EntityType.HABIT, HABIT, "name", FieldValue.of("From B"));
+            deviceB.engine.sync();
+
+            SyncOutcome outcome = deviceA.engine.sync();
+
+            assertThat(outcome.conflicts()).hasSize(1);
+            Conflict conflict = outcome.conflicts().get(0);
+            assertThat(conflict.kind()).isEqualTo(Conflict.Kind.FIELD_OVERWRITTEN);
+            assertThat(conflict.field()).isEqualTo("name");
+            assertThat(conflict.entity()).isEqualTo(KEY);
+            assertThat(conflict.lostLocalWrite()).isTrue();
+            assertThat(conflict.loser().nodeId()).isEqualTo("device-a");
+            assertThat(conflict.winner().nodeId()).isEqualTo("device-b");
+            assertThat(outcome.lostLocalWrites()).hasSize(1);
+            assertThat(deviceA.name()).isEqualTo("From B");
+        }
+
+        /**
+         * The other direction. Device B's pull carries A's older, losing write — real
+         * information for a debug screen, but nothing this user did and nothing to
+         * interrupt them over.
+         */
+        @Test
+        void separatesAnotherDevicesLossFromThisUsersOwn() throws Exception {
+            deviceA.engine.upsert(EntityType.HABIT, HABIT, "name", FieldValue.of("From A"));
+            deviceA.engine.sync();
+
+            deviceB.time.advance(5_000);
+            deviceB.engine.upsert(EntityType.HABIT, HABIT, "name", FieldValue.of("From B"));
+
+            SyncOutcome outcome = deviceB.engine.sync();
+
+            assertThat(outcome.conflicts()).hasSize(1);
+            assertThat(outcome.conflicts().get(0).lostLocalWrite()).isFalse();
+            assertThat(outcome.lostLocalWrites()).isEmpty();
+        }
+
+        /** ADR-003's opening scenario, from the losing device's point of view. */
+        @Test
+        void reportsAnEntityDeletedElsewhereThatHeldTheUsersEdits() throws Exception {
+            deviceA.engine.upsert(EntityType.HABIT, HABIT, "name", FieldValue.of("Evening Run"));
+            deviceA.engine.sync();
+            deviceB.engine.sync();
+
+            deviceA.engine.upsert(EntityType.HABIT, HABIT, "name", FieldValue.of("Evening Jog"));
+            deviceB.time.advance(2_000);
+            deviceB.engine.delete(EntityType.HABIT, HABIT);
+            deviceB.engine.sync();
+
+            SyncOutcome outcome = deviceA.engine.sync();
+
+            // No register was contested — the tombstone landed on an unset lifecycle
+            // register — so this is only visible by comparing the entity either side of
+            // the page.
+            assertThat(outcome.conflicts()).hasSize(1);
+            Conflict conflict = outcome.conflicts().get(0);
+            assertThat(conflict.kind()).isEqualTo(Conflict.Kind.HIDDEN_BY_DELETE);
+            assertThat(conflict.field()).isNull();
+            assertThat(conflict.lostLocalWrite()).isTrue();
+            assertThat(conflict.winner().nodeId()).isEqualTo("device-b");
+            assertThat(conflict.loser().nodeId()).isEqualTo("device-a");
+
+            assertThat(deviceA.visible()).isFalse();
+            assertThat(deviceA.name()).as("the write survives; only its visibility is lost").isEqualTo("Evening Jog");
+        }
+
+        @Test
+        void staysSilentAboutTheUsersOwnDeleteComingBackFromTheServer() throws Exception {
+            deviceA.engine.upsert(EntityType.HABIT, HABIT, "name", FieldValue.of("Run"));
+            deviceA.engine.delete(EntityType.HABIT, HABIT);
+
+            // The push, and then a pull that hands both ops straight back.
+            deviceA.engine.sync();
+            SyncOutcome outcome = deviceA.engine.sync();
+
+            assertThat(deviceA.visible()).isFalse();
+            assertThat(outcome.conflicts()).as("the user deleted it on purpose").isEmpty();
+        }
+
+        /**
+         * The failure that would make this feature worse than useless: an at-least-once
+         * network manufacturing a conflict notice out of every successful round trip.
+         */
+        @Test
+        void treatsARepeatedWriteAsIdempotenceRatherThanContention() throws Exception {
+            FakeServer duplicating = new FakeServer().duplicateEveryPage();
+            Device fresh = new Device("device-c", duplicating);
+            duplicating.receiveFrom(
+                    Change.upsert(
+                            UUID.randomUUID(),
+                            EntityType.HABIT,
+                            HABIT,
+                            new Hlc(1_700_000_001_000L, 0, "device-b"),
+                            Map.of("name", FieldValue.of("Run"))));
+
+            SyncOutcome first = fresh.engine.sync();
+            SyncOutcome second = fresh.engine.sync();
+
+            assertThat(first.conflicts()).isEmpty();
+            assertThat(second.conflicts()).isEmpty();
+            assertThat(first.conflictsObserved()).isZero();
+        }
+
+        @Test
+        void saysNothingWhenAWriteLandsOnAFieldNobodyHadSet() throws Exception {
+            server.receiveFrom(
+                    Change.upsert(
+                            UUID.randomUUID(),
+                            EntityType.HABIT,
+                            HABIT,
+                            new Hlc(1_700_000_001_000L, 0, "device-b"),
+                            Map.of("name", FieldValue.of("Run"))));
+
+            SyncOutcome outcome = deviceA.engine.sync();
+
+            assertThat(outcome.conflicts()).isEmpty();
+            assertThat(outcome.conflictsObserved()).isZero();
+        }
+
+        @Test
+        void keepsCountingAfterItStopsListing() throws Exception {
+            int overCap = SyncEngine.MAX_REPORTED_CONFLICTS + 20;
+            for (int i = 0; i < overCap; i++) {
+                UUID habit = UUID.randomUUID();
+                deviceA.engine.upsert(EntityType.HABIT, habit, "name", FieldValue.of("local-" + i));
+                // A later write from elsewhere, which will overwrite the local one.
+                server.receiveFrom(
+                        Change.upsert(
+                                UUID.randomUUID(),
+                                EntityType.HABIT,
+                                habit,
+                                new Hlc(deviceA.time.currentTimeMillis() + 60_000, i, "device-b"),
+                                Map.of("name", FieldValue.of("remote-" + i))));
+            }
+
+            SyncOutcome outcome = deviceA.engine.sync();
+
+            assertThat(outcome.conflicts()).hasSize(SyncEngine.MAX_REPORTED_CONFLICTS);
+            assertThat(outcome.conflictsObserved())
+                    .as("a truncated list must not imply it listed everything")
+                    .isEqualTo(overCap);
+        }
+
+        @Test
+        void discardsReportsThatARequestedResyncHasMadeMeaningless() throws Exception {
+            deviceA.engine.upsert(EntityType.HABIT, HABIT, "name", FieldValue.of("From A"));
+            deviceA.engine.sync();
+            deviceB.time.advance(5_000);
+            deviceB.engine.upsert(EntityType.HABIT, HABIT, "name", FieldValue.of("From B"));
+            deviceB.engine.sync();
+
+            server.demandResync(1);
+            SyncOutcome outcome = deviceA.engine.sync();
+
+            assertThat(outcome.resynced()).isTrue();
+            // A bootstrap replays the whole retained log, so every overwrite the account has
+            // ever seen is re-derived here. Those verdicts are history, not news, and the
+            // device has no way to tell which of them it already reported.
+            assertThat(outcome.conflicts())
+                    .as("a rebuild re-derives old verdicts; none of them are news")
+                    .isEmpty();
+            assertThat(outcome.conflictsObserved())
+                    .as("and the count must not imply there were reports being withheld")
+                    .isZero();
+        }
+    }
+
+    @Nested
     @DisplayName("clock handling")
     class Clocks {
 

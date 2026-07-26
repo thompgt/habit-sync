@@ -61,6 +61,17 @@ public final class SyncEngine {
      */
     public static final int DEFAULT_MAX_PAGES_PER_SYNC = 20;
 
+    /**
+     * Conflicts retained per {@link #sync()} call before only the count is kept.
+     *
+     * <p>A device coming back from a fortnight offline can lose thousands of writes in one
+     * drain, and holding every report would put an unbounded, user-controlled list in
+     * memory on a phone. The cap is generous next to what any notice or debug screen can
+     * usefully display, and {@link SyncOutcome#conflictsObserved()} still reports the true
+     * total so nothing is silently understated.
+     */
+    public static final int MAX_REPORTED_CONFLICTS = 200;
+
     private final HlcClock clock;
     private final LocalStore store;
     private final Transport transport;
@@ -150,6 +161,9 @@ public final class SyncEngine {
 
     private Change applyLocally(Change op) {
         EntityRecord current = store.load(op.key()).orElse(null);
+        // No conflict can arise here, so none is collected: clock.tick() returns a reading
+        // strictly greater than everything this device has stamped or observed, so a local
+        // edit outranks every register it could land on. Losses are a pull-side phenomenon.
         EntityRecord merged = mergeEngine.merge(current, op).state();
         // One atomic write: the entity the user can now see, and the op that will tell the
         // server about it. Splitting these is how an edit ends up visible on one device
@@ -190,6 +204,7 @@ public final class SyncEngine {
         int applied = 0;
         int pages = 0;
         boolean resynced = false;
+        final ConflictLog conflicts = new ConflictLog();
 
         while (pages < maxPagesPerSync) {
             long watermarkBefore = store.watermark();
@@ -216,26 +231,48 @@ public final class SyncEngine {
                 // un-pushed work, and the server's retention policy is no reason to bin it.
                 store.resetForResync();
                 resynced = true;
+                // Nothing this sync says about conflicts survives the wipe. Reports taken
+                // before it describe registers that no longer exist; reports taken after it
+                // are worse, because a bootstrap replays the entire retained log and every
+                // overwrite in the account's history — months old, long since notified —
+                // would be re-announced as news and would crowd out the bounded list. The
+                // device cannot tell which of those it has already shown. State converges
+                // either way; the notice is a courtesy, and a courtesy that cries wolf over
+                // ancient history is worse than silence.
+                conflicts.suppress();
                 continue;
             }
 
-            int appliedNow = applyPage(response, watermarkBefore);
+            int appliedNow = applyPage(response, watermarkBefore, conflicts);
             applied += appliedNow;
 
             boolean outboxDrained = store.pendingOpCount() == 0;
             if (!response.hasMore() && outboxDrained) {
-                return new SyncOutcome(acknowledged, applied, pages, store.watermark(), resynced, false);
+                return outcome(acknowledged, applied, pages, resynced, false, conflicts);
             }
 
             // Progress guard. Without it, a server that reports hasMore but returns an
             // unchanging page, or one that never acknowledges a poison op, spins this loop
             // until maxPagesPerSync burning battery and bandwidth on every sync forever.
             if (ackedNow == 0 && appliedNow == 0) {
-                return new SyncOutcome(acknowledged, applied, pages, store.watermark(), resynced, true);
+                return outcome(acknowledged, applied, pages, resynced, true, conflicts);
             }
         }
 
-        return new SyncOutcome(acknowledged, applied, pages, store.watermark(), resynced, true);
+        return outcome(acknowledged, applied, pages, resynced, true, conflicts);
+    }
+
+    private SyncOutcome outcome(
+            int acknowledged, int applied, int pages, boolean resynced, boolean more, ConflictLog conflicts) {
+        return new SyncOutcome(
+                acknowledged,
+                applied,
+                pages,
+                store.watermark(),
+                resynced,
+                more,
+                conflicts.reported(),
+                conflicts.observed());
     }
 
     private int acknowledge(SyncResponse response, List<Change> pushed) {
@@ -263,7 +300,8 @@ public final class SyncEngine {
      * page is irrelevant — merge is commutative — but folding in arrival order keeps the
      * intermediate states meaningful when stepping through a debugger.
      */
-    private int applyPage(SyncResponse response, long watermarkBefore) throws TransportException {
+    private int applyPage(SyncResponse response, long watermarkBefore, ConflictLog conflicts)
+            throws TransportException {
         if (response.changes().isEmpty()) {
             return 0;
         }
@@ -278,6 +316,11 @@ public final class SyncEngine {
         }
 
         Map<EntityKey, EntityRecord> working = new LinkedHashMap<>();
+        // What each entity looked like before this page, kept so the page's net effect on
+        // visibility can be judged at the end. Judging it per change would misreport a page
+        // carrying a DELETE and a later RESTORE as a deletion.
+        Map<EntityKey, EntityRecord> before = new LinkedHashMap<>();
+
         for (SequencedChange sequenced : response.changes()) {
             Change change = sequenced.change();
 
@@ -289,13 +332,105 @@ public final class SyncEngine {
             // Not computeIfAbsent: a not-yet-known entity maps to null, which
             // computeIfAbsent refuses to store, so it would reload on every change.
             if (!working.containsKey(key)) {
-                working.put(key, store.load(key).orElse(null));
+                EntityRecord loaded = store.load(key).orElse(null);
+                working.put(key, loaded);
+                before.put(key, loaded);
             }
-            working.put(key, mergeEngine.merge(working.get(key), change).state());
+            MergeResult result = mergeEngine.merge(working.get(key), change);
+            for (Resolution resolution : result.resolutions()) {
+                Conflict.from(key, resolution, clock.nodeId()).ifPresent(conflicts::add);
+            }
+            working.put(key, result.state());
         }
+
+        working.forEach((key, state) -> reportIfHidden(key, before.get(key), state, conflicts));
 
         List<EntityRecord> merged = new ArrayList<>(working.values());
         store.applyRemote(merged, response.nextSeq(), clock.peek());
         return response.changes().size();
+    }
+
+    /**
+     * Reports the ADR-003 headline case: something the user could see, and had edited here,
+     * was deleted on another device.
+     *
+     * <p>No register was contested — the tombstone landed on an unset lifecycle register
+     * and the field writes survive intact — so {@link MergeEngine} correctly saw nothing
+     * remarkable. The loss is one of visibility, and it is only detectable by comparing the
+     * entity either side of the page, which is why it is handled here rather than in merge.
+     */
+    private void reportIfHidden(
+            EntityKey key, EntityRecord before, EntityRecord after, ConflictLog conflicts) {
+        if (before == null || !before.visible() || after.visible()) {
+            return;
+        }
+        Hlc deletedBy = after.lifecycleClock();
+        if (deletedBy.nodeId().equals(clock.nodeId())) {
+            // This device's own delete, arriving back from the server. The user did it on
+            // purpose and does not need telling.
+            return;
+        }
+        // Only the user's own work is worth a notice. An entity holding nothing but other
+        // devices' writes has cost this user nothing they will recognise.
+        Hlc ownWrite = newestWriteBy(after, clock.nodeId());
+        if (ownWrite != null) {
+            conflicts.add(Conflict.hiddenByDelete(key, deletedBy, ownWrite));
+        }
+    }
+
+    private static Hlc newestWriteBy(EntityRecord record, String nodeId) {
+        Hlc newest = null;
+        for (Hlc written : record.fieldClocks().values()) {
+            if (written.nodeId().equals(nodeId) && (newest == null || written.isAfter(newest))) {
+                newest = written;
+            }
+        }
+        return newest;
+    }
+
+    /**
+     * Accumulates conflict reports across the pages of one sync, keeping a bounded list and
+     * an unbounded count.
+     *
+     * <p>The count keeps going after the list stops, so a caller can distinguish "three
+     * things were lost" from "three of the two thousand things lost are listed here". A
+     * plain truncated list cannot express the second, and quietly implies the first.
+     */
+    private static final class ConflictLog {
+        private final List<Conflict> reported = new ArrayList<>();
+        private int observed;
+        private boolean suppressed;
+
+        void add(Conflict conflict) {
+            if (suppressed) {
+                return;
+            }
+            observed++;
+            if (reported.size() < MAX_REPORTED_CONFLICTS) {
+                reported.add(conflict);
+            }
+        }
+
+        /**
+         * Drops what has been collected and declines everything for the rest of the sync.
+         *
+         * <p>Latched rather than merely cleared: a resync is followed by a replay of the
+         * whole retained log in the same {@link #sync()} call, so clearing once and
+         * carrying on would simply refill the list with the account's entire conflict
+         * history.
+         */
+        void suppress() {
+            reported.clear();
+            observed = 0;
+            suppressed = true;
+        }
+
+        List<Conflict> reported() {
+            return reported;
+        }
+
+        int observed() {
+            return observed;
+        }
     }
 }
