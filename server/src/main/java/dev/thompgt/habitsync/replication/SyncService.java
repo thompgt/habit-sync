@@ -226,6 +226,10 @@ public class SyncService {
         UUID userId = principal.userId();
         long currentSeq = changeLog.currentSequence(userId);
 
+        if (sinceSeq == 0) {
+            return bootstrap(principal, appliedOpIds);
+        }
+
         // GC horizon check (ADR-003). If the oldest retained change is newer than the
         // client's watermark + 1, changes it has never seen have already been collected,
         // and serving the remainder would leave it silently missing tombstones. A full
@@ -271,6 +275,97 @@ public class SyncService {
                 envelopes,
                 nextSeq,
                 hasMore,
+                false,
+                null,
+                clock.millis(),
+                dev.thompgt.habitsync.replication.dto.SyncDtos.PROTOCOL_VERSION);
+    }
+
+    // ------------------------------------------------------------ bootstrap
+
+    /**
+     * Serves a device starting from nothing out of current entity state, not the log.
+     *
+     * <p>This is what makes log retention possible at all. Replaying the log to a device at
+     * {@code sinceSeq = 0} requires the log to reach back to the account's first write
+     * forever; the moment anything is collected, a bootstrap silently omits every entity
+     * whose creating write fell in the collected range. That is not a corner case reserved
+     * for long-offline devices — a tablet added to a two-year-old account bootstraps from
+     * zero on the day it is bought.
+     *
+     * <p>Rebuilding from state instead makes the log purely a catch-up structure, which can
+     * be truncated from the front (see {@link RetentionService}) without any device losing
+     * data. It is also strictly cheaper: a snapshot is bounded by what the user currently
+     * has, and the log by everything they have ever done.
+     *
+     * <h4>One change per field, not one per entity</h4>
+     *
+     * Each field register carries its own HLC (ADR-001), and a wire change carries one. A
+     * single synthesised UPSERT per entity would have to flatten those clocks to one value,
+     * which would hand the device wrong provenance for every field and make its next merge
+     * decide conflicts incorrectly. Emitting a change per field preserves each register
+     * exactly and needs no protocol change.
+     *
+     * <h4>Why the sequence is read first</h4>
+     *
+     * A push committing between the two reads leaves entity state <em>ahead</em> of
+     * {@code snapshotSeq}, never behind — the sequence is only visible once the transaction
+     * that allocated it has committed its entity writes too. The device therefore receives
+     * those changes a second time on its next pull, and merge is idempotent, so applying
+     * them twice is a no-op. Reading the sequence afterwards would produce the opposite and
+     * fatal skew: a watermark past state the device never received.
+     */
+    private SyncResponse bootstrap(AuthenticatedUser principal, List<UUID> appliedOpIds) {
+        UUID userId = principal.userId();
+        long snapshotSeq = changeLog.currentSequence(userId);
+
+        List<SyncChangeEnvelope> envelopes = new ArrayList<>();
+        for (EntityRepository.StoredEntityRow row : entities.loadAll(userId)) {
+            for (Map.Entry<String, String> field : row.entity().fieldValues().entrySet()) {
+                envelopes.add(new SyncChangeEnvelope(
+                        snapshotSeq,
+                        new WireChange(
+                                UUID.randomUUID(),
+                                row.entityType(),
+                                row.entityId(),
+                                "UPSERT",
+                                row.entity().fieldClocks().get(field.getKey()),
+                                // A single-entry map, and not Map.of: a cleared field is a
+                                // null value, which Map.of rejects outright.
+                                java.util.Collections.singletonMap(field.getKey(), field.getValue()))));
+            }
+            String lifecycle = row.entity().lifecycleHlc();
+            if (lifecycle != null) {
+                envelopes.add(new SyncChangeEnvelope(
+                        snapshotSeq,
+                        new WireChange(
+                                UUID.randomUUID(),
+                                row.entityType(),
+                                row.entityId(),
+                                row.entity().deleted() ? "DELETE" : "RESTORE",
+                                lifecycle,
+                                Map.of())));
+            }
+        }
+
+        log.info(
+                "Bootstrapping device {} from a snapshot at seq {}: {} changes",
+                principal.deviceId(),
+                snapshotSeq,
+                envelopes.size());
+
+        accounts.recordDeviceProgress(userId, principal.deviceId(), 0, clock.instant());
+
+        // Sent whole rather than paged. Unlike the log, a snapshot is bounded by the user's
+        // live entities rather than by their history, so it does not grow without limit —
+        // but it is not bounded by MAX_PAGE_SIZE either, and paging it would need a cursor
+        // the protocol does not carry, since synthesised changes have no sequence of their
+        // own to resume from. Worth revisiting if accounts ever get large.
+        return new SyncResponse(
+                appliedOpIds,
+                envelopes,
+                snapshotSeq,
+                false,
                 false,
                 null,
                 clock.millis(),

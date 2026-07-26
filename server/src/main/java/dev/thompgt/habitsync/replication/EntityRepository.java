@@ -3,6 +3,7 @@ package dev.thompgt.habitsync.replication;
 import dev.thompgt.habitsync.sync.Hlc;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -66,6 +67,75 @@ public class EntityRepository {
 
         return Optional.of(new StoredEntity(deleted, lifecycleHlc, values, clocks));
     }
+
+    /**
+     * Loads every entity this user has, tombstones included.
+     *
+     * <p>Backs the bootstrap snapshot. Tombstones are deliberately in scope: a device that
+     * rebuilt from a snapshot omitting them would show entities that were deleted, and its
+     * next local edit to one would look, to a reader, like a resurrection.
+     *
+     * <p>Two queries and a join in memory rather than one SQL join, matching
+     * {@link #load}: an entity with no field rows yet — created by a DELETE that arrived
+     * before its UPSERT — must still appear.
+     */
+    public List<StoredEntityRow> loadAll(UUID userId) {
+        Map<Key, StoredEntityRow> byKey = new LinkedHashMap<>();
+        jdbc.query(
+                """
+                SELECT entity_type, entity_id, deleted, lifecycle_hlc FROM entity
+                 WHERE user_id = ?
+                 ORDER BY entity_type, entity_id
+                """,
+                rs -> {
+                    Key key = new Key(rs.getString("entity_type"), rs.getObject("entity_id", UUID.class));
+                    byKey.put(
+                            key,
+                            new StoredEntityRow(
+                                    key.entityType(),
+                                    key.entityId(),
+                                    new StoredEntity(
+                                            rs.getBoolean("deleted"),
+                                            rs.getString("lifecycle_hlc"),
+                                            new LinkedHashMap<>(),
+                                            new LinkedHashMap<>())));
+                },
+                userId);
+
+        // Mutable accumulators, then a rebuild: StoredEntity copies its maps defensively,
+        // so fields cannot be added to one after construction.
+        Map<Key, Map<String, String>> values = new LinkedHashMap<>();
+        Map<Key, Map<String, String>> clocks = new LinkedHashMap<>();
+        jdbc.query(
+                """
+                SELECT entity_type, entity_id, field, value, hlc FROM entity_field
+                 WHERE user_id = ?
+                """,
+                rs -> {
+                    Key key = new Key(rs.getString("entity_type"), rs.getObject("entity_id", UUID.class));
+                    values.computeIfAbsent(key, k -> new LinkedHashMap<>())
+                            .put(rs.getString("field"), rs.getString("value"));
+                    clocks.computeIfAbsent(key, k -> new LinkedHashMap<>())
+                            .put(rs.getString("field"), rs.getString("hlc"));
+                },
+                userId);
+
+        List<StoredEntityRow> rows = new java.util.ArrayList<>(byKey.size());
+        byKey.forEach((key, row) -> rows.add(new StoredEntityRow(
+                row.entityType(),
+                row.entityId(),
+                new StoredEntity(
+                        row.entity().deleted(),
+                        row.entity().lifecycleHlc(),
+                        values.getOrDefault(key, Map.of()),
+                        clocks.getOrDefault(key, Map.of())))));
+        return rows;
+    }
+
+    private record Key(String entityType, UUID entityId) {}
+
+    /** An entity together with the identity it is stored under. */
+    public record StoredEntityRow(String entityType, UUID entityId, StoredEntity entity) {}
 
     /**
      * Writes merged state back.

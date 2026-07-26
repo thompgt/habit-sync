@@ -222,6 +222,78 @@ class SyncProtocolTest extends AbstractIntegrationTest {
         assertThat(entityDeleted(second, habit)).isEqualTo(entityDeleted(first, habit));
     }
 
+    // ------------------------------------------------------------- bootstrap
+
+    @Test
+    @DisplayName("a device starting from zero gets current state, not a replay of history")
+    void bootstrapCollapsesSupersededHistory() {
+        Account account = twoDeviceAccount();
+        UUID habit = UUID.randomUUID();
+
+        push(account.deviceA(), 0, upsert(habit, "1000:0:device-a", Map.of("name", "Run")));
+        push(account.deviceA(), 1, upsert(habit, "2000:0:device-a", Map.of("name", "Jog")));
+        push(account.deviceA(), 2, upsert(habit, "3000:0:device-a", Map.of("name", "Sprint")));
+
+        SyncResponse boot = pull(account.deviceB(), 0);
+
+        // Three log entries, one surviving register. The intermediate names are history the
+        // device has no use for -- and replaying them is what forces the log to be kept
+        // back to the account's first write forever.
+        assertThat(boot.changes()).hasSize(1);
+        assertThat(boot.changes().get(0).change().fields()).containsEntry("name", "Sprint");
+        assertThat(boot.nextSeq()).isEqualTo(3L);
+    }
+
+    @Test
+    @DisplayName("each field keeps its own HLC through a bootstrap, not one clock per entity")
+    void bootstrapPreservesPerFieldClocks() {
+        Account account = twoDeviceAccount();
+        UUID habit = UUID.randomUUID();
+
+        push(account.deviceA(), 0, upsert(habit, "1000:0:device-a", Map.of("name", "Run")));
+        push(account.deviceB(), 0, upsert(habit, "5000:0:device-b", Map.of("targetPerWeek", "3")));
+
+        SyncResponse boot = pull(account.deviceA(), 0);
+
+        // Flattening these onto one clock would hand the device false provenance, and its
+        // next conflict on the older field would then resolve the wrong way.
+        Map<String, String> clockByField = new HashMap<>();
+        boot.changes()
+                .forEach(c -> c.change().fields().keySet().forEach(f -> clockByField.put(f, c.change().hlc())));
+
+        assertThat(clockByField).containsEntry("name", "1000:0:device-a");
+        assertThat(clockByField).containsEntry("targetPerWeek", "5000:0:device-b");
+    }
+
+    @Test
+    @DisplayName("a bootstrap carries tombstones, or the new device shows deleted entities")
+    void bootstrapIncludesTombstones() {
+        Account account = twoDeviceAccount();
+        UUID habit = UUID.randomUUID();
+
+        push(account.deviceA(), 0, upsert(habit, "1000:0:device-a", Map.of("name", "Run")));
+        push(account.deviceA(), 1, delete(habit, "2000:0:device-a"));
+
+        SyncResponse boot = pull(account.deviceB(), 0);
+
+        assertThat(boot.changes())
+                .as("the field register survives the tombstone (ADR-003), so both are sent")
+                .hasSize(2);
+        assertThat(boot.changes())
+                .anySatisfy(c -> assertThat(c.change().kind()).isEqualTo("DELETE"));
+    }
+
+    @Test
+    void bootstrappingAnEmptyAccountReturnsNothing() {
+        Account account = twoDeviceAccount();
+
+        SyncResponse boot = pull(account.deviceA(), 0);
+
+        assertThat(boot.changes()).isEmpty();
+        assertThat(boot.nextSeq()).isZero();
+        assertThat(boot.resyncRequired()).isFalse();
+    }
+
     // ------------------------------------------------------- clock plausibility
 
     @Test
