@@ -68,6 +68,38 @@ in-memory replicas driving the real engine over an in-process transport it can
 partition, delay, reorder, and duplicate at will — no emulator, no network, no mocks
 of the logic under test.
 
+### Losing data on purpose, visibly
+
+Last-writer-wins loses writes. That is the deal, and both conflict ADRs accept it on one
+condition: **the loss is shown to the user rather than swallowed.** Silent data loss is a
+bug; visible, explained loss under a documented rule is a trade-off.
+
+So a sync returns what it discarded. `SyncOutcome` carries the field a remote write
+overwrote, the delete that hid an entity the user had been editing, and — separately —
+whether the losing write was one *this* device made, which is the only kind worth
+interrupting anybody about. The list is bounded and the count is not, so a client can say
+"and 40 more" instead of implying it listed everything.
+
+### Retention, and what had to be built first
+
+Tombstones cannot be kept forever and cannot be dropped freely: dropping one a device has
+not seen lets that device resurrect the entity. ADR-003 sets a 90-day window and makes the
+pull-side horizon check — not the collector's care — the safety property.
+
+Collecting the log turned out to need a prior change. A device starting from scratch was
+served by *replaying the log*, which requires keeping it back to the account's first write
+forever; trim anything and a bootstrap silently omits every entity created in the trimmed
+range. That is not a corner case for long-offline devices — a tablet added to a two-year-old
+account starts from zero on the day it is bought. Bootstraps are now served from **current
+entity state**, one synthesised change per field so each register keeps its own clock, which
+makes the log purely a catch-up structure that can be truncated from the front.
+
+The collector deletes a *sequence prefix*, never a time range. `created_at` is a
+transaction's start time while `server_seq` is handed out under a lock, so of two
+overlapping pushes the earlier-started one can take the higher sequence — deleting by time
+punches a hole in the middle of the log instead of trimming its front, and a device below a
+hole passes the horizon check while permanently missing what is inside it.
+
 ## Project status
 
 | Milestone | State |
@@ -77,7 +109,7 @@ of the logic under test.
 | M2 — Server domain, schema, auth | ✅ done — 24 tests against real Postgres |
 | M3 — Android client, fully offline | ⬜ blocked (no Android SDK on dev machine) |
 | M4 — Sync protocol v1 | ✅ done — 21 protocol tests on the server, 36 on the client |
-| M5 — Conflict semantics & hardening | ⬜ |
+| M5 — Conflict semantics & hardening | ✅ done — losses reported to the client, skew rejected, retention collecting |
 | M6 — Deterministic convergence simulator | ⬜ |
 | M7 — Multi-device UX & observability | ⬜ |
 
