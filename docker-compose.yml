@@ -1,0 +1,42 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: habitsync
+      POSTGRES_USER: habitsync
+      POSTGRES_PASSWORD: habitsync
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U habitsync -d habitsync"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/habitsync
+      DB_USER: habitsync
+      DB_PASSWORD: habitsync
+      # Dev-only signing key. Production supplies this from the environment and the
+      # app refuses to start without it — see SecurityConfig.
+      JWT_SECRET: dev-only-insecure-key-do-not-use-outside-local-development-0123456789
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+volumes:
+  pgdata:
