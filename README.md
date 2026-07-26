@@ -65,7 +65,7 @@ of the logic under test.
 | M1 — `sync-core` primitives (HLC, merge engine) | ✅ done — 47 tests, ~7k generated cases |
 | M2 — Server domain, schema, auth | ✅ done — 24 tests against real Postgres |
 | M3 — Android client, fully offline | ⬜ blocked (no Android SDK on dev machine) |
-| M4 — Sync protocol v1 | ⬜ |
+| M4 — Sync protocol v1 | 🔨 server side done; client `SyncEngine` next |
 | M5 — Conflict semantics & hardening | ⬜ |
 | M6 — Deterministic convergence simulator | ⬜ |
 | M7 — Multi-device UX & observability | ⬜ |
