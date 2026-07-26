@@ -49,6 +49,39 @@ public final class HlcClock {
         new Hlc(0L, 0, nodeId);
     }
 
+    /**
+     * Rebuilds a clock from its persisted state after process death.
+     *
+     * <p>Restoring is not optional. A device that restarts from zero re-stamps edits with
+     * timestamps at or below ones it has already issued, so its own fresh writes lose to
+     * its own stale ones — and if the wall clock has not advanced past the stored reading,
+     * it can issue the very same timestamp twice, which is the one client-side way to
+     * break convergence outright.
+     *
+     * <p>Unlike {@link #observe(Hlc)} this applies <b>no drift check</b>, deliberately.
+     * The stored reading is this node's own history, not a peer's claim. A device whose
+     * user rolled the system clock backwards is exactly the case that must survive, and
+     * refusing to start is not a recovery strategy.
+     *
+     * @param previous the value from {@link LocalStore#lastClock()}; its node id must match
+     */
+    public static HlcClock restored(
+            String nodeId, TimeSource timeSource, Duration maxDrift, Hlc previous) {
+        Objects.requireNonNull(previous, "previous");
+        if (!previous.nodeId().equals(nodeId)) {
+            // A mismatch means the stored state belongs to a different device — a restored
+            // backup, or a device id regenerated underneath us. Adopting the timestamp
+            // would be harmless, but adopting it *silently* hides a bug that shows up
+            // later as two devices sharing one node id, which does break convergence.
+            throw new IllegalArgumentException(
+                    "Persisted clock belongs to node %s, not %s".formatted(previous.nodeId(), nodeId));
+        }
+        HlcClock clock = new HlcClock(nodeId, timeSource, maxDrift);
+        clock.physicalMillis = previous.physicalMillis();
+        clock.logical = previous.logical();
+        return clock;
+    }
+
     public String nodeId() {
         return nodeId;
     }

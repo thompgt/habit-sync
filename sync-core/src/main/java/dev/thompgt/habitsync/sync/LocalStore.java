@@ -61,8 +61,10 @@ public interface LocalStore {
      *
      * @param merged  entity states after merging the page, at most one entry per entity
      * @param nextSeq the new watermark; never lower than the current one
+     * @param clock   this device's clock reading after observing every change in the page;
+     *                persisted in the same transaction, see {@link #lastClock()}
      */
-    void applyRemote(Collection<EntityRecord> merged, long nextSeq);
+    void applyRemote(Collection<EntityRecord> merged, long nextSeq, Hlc clock);
 
     /** @return the highest {@code serverSeq} durably applied; 0 if nothing ever has been. */
     long watermark();
@@ -92,12 +94,21 @@ public interface LocalStore {
     void resetForResync();
 
     /**
-     * @return the HLC state to restore this device's clock from at startup, or empty on a
-     *         fresh install. Persisting it is required: a device that restarts with a
-     *         zeroed clock stamps edits that lose to its own earlier ones.
+     * @return the highest clock reading this store has persisted, or empty on a fresh
+     *         install. Implementations derive it from the writes they already accept —
+     *         {@code op.hlc()} in {@link #applyLocal} and the {@code clock} argument to
+     *         {@link #applyRemote} — rather than from a separate save call.
+     *
+     * <p>There is deliberately no {@code saveClock} method, because a separate call could
+     * land on the other side of a crash from the op it stamped. That is the one failure
+     * this design cannot tolerate: reusing an HLC for two different local changes gives
+     * two writes an identical timestamp, and merge's strictly-greater rule then lets
+     * replicas that see them in different orders pick different winners. Duplicate
+     * timestamps are the one way to break convergence from the client side, so the clock
+     * is persisted by the same atomic write as the change that used it, or not at all.
+     *
+     * <p>Note {@link #resetForResync()} must <b>not</b> clear this. The clock is this
+     * device's monotonic history; a resync discards replicated state, not identity.
      */
     Optional<Hlc> lastClock();
-
-    /** Persists the clock reading, so it survives process death. */
-    void saveClock(Hlc hlc);
 }
