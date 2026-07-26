@@ -42,12 +42,23 @@ without it, two events at the same instant are unordered and convergence fails.
 
 ```
 sync-core/    Pure Java 17. No Spring. No Android. No ORM.
-              HLC, ops, merge engine, sync orchestration — behind
-              LocalStore / Transport / TimeSource interfaces.
+              HLC, ops, merge engine, wire codec, and the client
+              SyncEngine — behind LocalStore / Transport / TimeSource.
 
 server/       Spring Boot 3.5 + Postgres. Depends on sync-core.
 android/      Java Android client. Room + WorkManager. Depends on sync-core.
 ```
+
+Both halves of the protocol live in `sync-core`, and both ends encode through the same
+`ChangeCodec`. The server decodes what devices push; the client encodes what it sends.
+A payload one side accepts is therefore one the other produces, by construction rather
+than by agreement.
+
+`SyncEngine` is the client half: it stamps local edits, pushes the outbox, pulls what the
+device missed, merges it, and moves the watermark. It has no I/O of its own — storage,
+network and clock are all injected — so it runs on a plain JVM against an in-process
+server, which is what M6 needs. What is *not* built is the on-device transport that
+speaks real HTTP; that ships with the Android client and is blocked behind M3.
 
 The server and the client **run the same `MergeEngine`**. They cannot disagree about
 who won a conflict, because it is literally the same code path.
@@ -65,7 +76,7 @@ of the logic under test.
 | M1 — `sync-core` primitives (HLC, merge engine) | ✅ done — 47 tests, ~7k generated cases |
 | M2 — Server domain, schema, auth | ✅ done — 24 tests against real Postgres |
 | M3 — Android client, fully offline | ⬜ blocked (no Android SDK on dev machine) |
-| M4 — Sync protocol v1 | 🔨 server side done; client `SyncEngine` next |
+| M4 — Sync protocol v1 | ✅ done — 21 protocol tests on the server, 36 on the client |
 | M5 — Conflict semantics & hardening | ⬜ |
 | M6 — Deterministic convergence simulator | ⬜ |
 | M7 — Multi-device UX & observability | ⬜ |
