@@ -13,6 +13,10 @@ build/
 out/
 bin/
 
+# jqwik records failing seeds here for local replay; it is a generated binary and
+# the seeds that matter are checked in as explicit regression tests instead.
+.jqwik-database
+
 # Java
 *.class
 hs_err_pid*

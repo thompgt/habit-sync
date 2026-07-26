@@ -39,13 +39,35 @@ indefinitely. Convergence must not require a human.
 - Physical deletion is impossible to sync: a missing row is indistinguishable from a row
   the peer has never seen, so a hard delete on one device would be re-created by the next
   sync from a peer that still has it.
-- On merge, if an entity carries a tombstone, field updates whose HLC is *concurrent with
-  or older than* the tombstone are **discarded** — but their field HLCs are still advanced.
-  Advancing the HLC even for discarded values matters: it keeps every replica's metadata
-  identical, so a later resurrection-adjacent edit resolves the same way everywhere.
-- A field edit strictly *newer* than the tombstone does **not** resurrect the entity.
-  Deletion is terminal. Undo is modelled as an explicit `restore` op with its own HLC —
-  a deliberate user action, never an accident of clock ordering.
+- A field edit **never** resurrects the entity, however recent it is. Deletion is
+  terminal. Undo is an explicit `restore` op with its own HLC — a deliberate user action,
+  never an accident of clock ordering. `DELETE` and `RESTORE` contend for a single
+  lifecycle register, resolved by HLC like any other.
+
+### Correction: the tombstone must not gate field writes
+
+An earlier draft of this ADR said that field updates on a tombstoned entity are
+*discarded* while their field HLCs still advance. **That is wrong — it makes merge
+non-commutative**, and implementing it surfaced the bug immediately.
+
+Take `UPSERT(name=X, hlc=5)` and `DELETE(hlc=3)` reaching two replicas in opposite orders:
+
+```
+Replica A:  UPSERT then DELETE  ->  deleted, name = X
+Replica B:  DELETE then UPSERT  ->  deleted, name = <unset>   // discarded by the tombstone
+```
+
+The replicas disagree, and no amount of re-syncing fixes it — they have both applied
+every change.
+
+The rule is therefore: **an entity's field registers and its lifecycle register are
+orthogonal.** Field writes apply unconditionally; the tombstone applies unconditionally;
+neither consults the other. Deletion affects **visibility at read time only** — the merge
+engine never branches on it, and queries filter on it. Both orders above then land on
+`deleted, name = X`, and the user simply never sees it.
+
+The user-visible promise ("your edit to a deleted habit is discarded") is unchanged. It is
+delivered by hiding the entity, not by refusing the write.
 
 ### Child records
 
