@@ -61,8 +61,8 @@ of the logic under test.
 
 | Milestone | State |
 |---|---|
-| M0 — Scaffolding, build, CI, ADRs | 🔨 in progress |
-| M1 — `sync-core` primitives (HLC, merge engine) | ⬜ |
+| M0 — Scaffolding, build, CI, ADRs | ✅ done |
+| M1 — `sync-core` primitives (HLC, merge engine) | ✅ done — 47 tests, ~7k generated cases |
 | M2 — Server domain, schema, auth | ⬜ |
 | M3 — Android client, fully offline | ⬜ blocked (no Android SDK on dev machine) |
 | M4 — Sync protocol v1 | ⬜ |
