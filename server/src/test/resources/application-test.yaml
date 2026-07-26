@@ -1,0 +1,16 @@
+spring:
+  flyway:
+    enabled: true
+    clean-disabled: false
+
+# Deterministic, obviously-fake signing key. Tests must never depend on the real one.
+security:
+  jwt:
+    secret: test-only-signing-key-at-least-32-bytes-long-for-hs256-0123456789
+    access-token-ttl: PT15M
+    refresh-token-ttl: P30D
+
+logging:
+  level:
+    org.testcontainers: WARN
+    com.github.dockerjava: WARN

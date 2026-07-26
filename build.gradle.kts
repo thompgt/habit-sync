@@ -6,9 +6,8 @@ plugins {
 subprojects {
     apply(plugin = "java")
 
-    repositories {
-        mavenCentral()
-    }
+    // Repositories are declared once in settings.gradle.kts under PREFER_SETTINGS.
+    // Re-declaring them here is ignored and warns on every build.
 
     // Every module compiles with `-Werror`. Sync bugs hide in the warnings you learn
     // to ignore, so we don't allow any to accumulate.
