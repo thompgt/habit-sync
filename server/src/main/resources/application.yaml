@@ -16,6 +16,16 @@ spring:
   jackson:
     default-property-inclusion: non_null
 
+security:
+  jwt:
+    # No default. A fallback signing key is the kind of thing that ships to production
+    # unnoticed, so the application refuses to start without one.
+    secret: ${JWT_SECRET}
+    access-token-ttl: PT15M
+    # Long, because an offline-first client whose session expires mid-offline-period
+    # cannot push the work queued behind it until the user logs in again.
+    refresh-token-ttl: P90D
+
 server:
   port: ${PORT:8080}
   error:
