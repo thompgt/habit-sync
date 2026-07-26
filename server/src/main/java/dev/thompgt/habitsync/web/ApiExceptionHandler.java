@@ -30,6 +30,19 @@ public class ApiExceptionHandler {
                 .body(Map.of("error", "authentication_failed", "message", "Authentication failed"));
     }
 
+    /**
+     * Malformed sync payloads — unknown entity type, unparseable HLC, oversized batch.
+     *
+     * <p>400 rather than 500: these describe a defect in the request, and a client that
+     * gets a 500 will retry the same bad payload forever.
+     */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Map<String, Object>> handleBadRequest(IllegalArgumentException e) {
+        log.info("Rejected malformed request: {}", e.getMessage());
+        return ResponseEntity.badRequest()
+                .body(Map.of("error", "bad_request", "message", String.valueOf(e.getMessage())));
+    }
+
     /** Validation errors are safe to return in detail — they describe the caller's own request. */
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<Map<String, Object>> handleValidation(MethodArgumentNotValidException e) {

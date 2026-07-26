@@ -14,7 +14,17 @@ spring:
     enabled: true
     locations: classpath:db/migration
   jackson:
-    default-property-inclusion: non_null
+    # Deliberately NOT default-property-inclusion: non_null.
+    #
+    # In the sync protocol a null field value is meaningful data -- it is an explicitly
+    # cleared field, as distinct from a field the change does not touch (absent key).
+    # NON_NULL omits null map entries, which silently deletes every "clear this field"
+    # operation from both the change_log payload and the HTTP response. The user clears
+    # a habit's colour, the edit propagates nowhere, and nothing anywhere reports an
+    # error.
+    #
+    # Tidier API responses are not worth a protocol that cannot express "set to null".
+    default-property-inclusion: always
 
 security:
   jwt:

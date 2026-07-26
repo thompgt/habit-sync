@@ -63,7 +63,7 @@ of the logic under test.
 |---|---|
 | M0 — Scaffolding, build, CI, ADRs | ✅ done |
 | M1 — `sync-core` primitives (HLC, merge engine) | ✅ done — 47 tests, ~7k generated cases |
-| M2 — Server domain, schema, auth | ⬜ |
+| M2 — Server domain, schema, auth | ✅ done — 24 tests against real Postgres |
 | M3 — Android client, fully offline | ⬜ blocked (no Android SDK on dev machine) |
 | M4 — Sync protocol v1 | ⬜ |
 | M5 — Conflict semantics & hardening | ⬜ |
