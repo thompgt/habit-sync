@@ -113,6 +113,20 @@ public class AccountRepository {
     }
 
     /**
+     * Devices whose watermark sits below {@code seq} — each one a forced resync.
+     *
+     * <p>Reported by the retention sweep, not obeyed by it. Bounding collection by the
+     * slowest device would let one lost phone pin an account's log forever, which is the
+     * unbounded growth retention exists to prevent. ADR-003 makes the pull-side horizon
+     * check the safety property and the window the policy; this is how an operator sees
+     * the policy's cost before users do.
+     */
+    public List<Device> findDevicesBehind(UUID userId, long seq) {
+        return jdbc.query(
+                "SELECT * FROM device WHERE user_id = ? AND last_seen_seq < ?", DEVICE_MAPPER, userId, seq);
+    }
+
+    /**
      * Records how far a device has durably synced.
      *
      * <p>Monotonic by construction — {@code GREATEST} means an out-of-order or replayed

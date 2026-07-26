@@ -157,6 +157,59 @@ public class ChangeLogRepository {
                 "SELECT min(server_seq) FROM change_log WHERE user_id = ?", Long.class, userId));
     }
 
+    // ------------------------------------------------------------- retention
+
+    /**
+     * The highest sequence that is safe to collect: every entry at or below it predates
+     * {@code cutoff}.
+     *
+     * <p>Derived from the oldest entry still <em>inside</em> the window rather than from
+     * the newest entry outside it, and the difference is not cosmetic. A change's
+     * {@code created_at} defaults to its transaction's start time, while its
+     * {@code server_seq} is handed out under the counter lock — so of two overlapping
+     * pushes, the one that started earlier can be the one that gets the higher sequence.
+     * Collecting a {@code created_at} range therefore punches a <b>hole</b> in the middle
+     * of the log rather than trimming its front.
+     *
+     * <p>A hole is silent data loss. The pull-side horizon check asks whether the oldest
+     * retained sequence is above the client's watermark, which only answers "has this
+     * client missed anything" if what remains is a contiguous suffix. With a hole, a
+     * device whose watermark sits below the hole passes the check and is served the
+     * surviving entries on either side, permanently missing the ones between.
+     *
+     * <p>Anchoring on the oldest in-window entry makes the deletion a prefix by
+     * construction, whatever order the timestamps landed in.
+     *
+     * @return the horizon, or empty when there is nothing old enough to collect
+     */
+    public Optional<Long> retentionHorizon(UUID userId, java.time.Instant cutoff) {
+        Long oldestInWindow = jdbc.queryForObject(
+                "SELECT min(server_seq) FROM change_log WHERE user_id = ? AND created_at >= ?",
+                Long.class,
+                userId,
+                java.sql.Timestamp.from(cutoff));
+
+        if (oldestInWindow != null) {
+            long horizon = oldestInWindow - 1;
+            return horizon >= 1 ? Optional.of(horizon) : Optional.empty();
+        }
+
+        // Nothing at all inside the window: the account has been quiet for longer than the
+        // retention period, so the whole log is collectable.
+        return Optional.ofNullable(
+                jdbc.queryForObject("SELECT max(server_seq) FROM change_log WHERE user_id = ?", Long.class, userId));
+    }
+
+    /** Hard-deletes the log prefix at or below {@code horizon}. @return rows removed. */
+    public int deleteUpTo(UUID userId, long horizon) {
+        return jdbc.update("DELETE FROM change_log WHERE user_id = ? AND server_seq <= ?", userId, horizon);
+    }
+
+    /** Users with anything in the log, for the retention sweep to walk. */
+    public List<UUID> usersWithLoggedChanges() {
+        return jdbc.queryForList("SELECT DISTINCT user_id FROM change_log", UUID.class);
+    }
+
     private RowMapper<LoggedChange> changeMapper() {
         return (rs, rowNum) -> new LoggedChange(
                 rs.getLong("server_seq"),

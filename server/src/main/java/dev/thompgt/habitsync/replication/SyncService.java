@@ -234,13 +234,24 @@ public class SyncService {
         // client's watermark + 1, changes it has never seen have already been collected,
         // and serving the remainder would leave it silently missing tombstones. A full
         // resync is the only safe answer.
+        //
+        // An empty log is the same question with no oldest entry to ask it of. It means
+        // either the account has never been written to, in which case sinceSeq cannot be
+        // behind, or retention collected the log whole -- and then a client below the head
+        // has missed everything and must be told so. Treating "no rows" as "nothing to
+        // catch up on" would hand such a client an empty page and let it believe it was
+        // current, which is the exact silent loss this check exists to prevent.
         var oldestRetained = changeLog.oldestRetainedSequence(userId);
-        if (sinceSeq > 0 && oldestRetained.isPresent() && oldestRetained.get() > sinceSeq + 1) {
+        boolean missedCollectedChanges = oldestRetained
+                .map(oldest -> oldest > sinceSeq + 1)
+                .orElse(sinceSeq < currentSeq);
+        if (sinceSeq > 0 && missedCollectedChanges) {
             log.info(
-                    "Device {} requested sinceSeq={} but oldest retained is {}; forcing resync",
+                    "Device {} requested sinceSeq={} but oldest retained is {} (head {}); forcing resync",
                     principal.deviceId(),
                     sinceSeq,
-                    oldestRetained.get());
+                    oldestRetained.map(String::valueOf).orElse("none — log fully collected"),
+                    currentSeq);
             return new SyncResponse(
                     appliedOpIds,
                     List.of(),

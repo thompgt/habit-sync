@@ -178,6 +178,34 @@ public class EntityRepository {
     }
 
     /**
+     * Hard-deletes tombstoned entities untouched since {@code cutoff} (ADR-003).
+     *
+     * <p>{@code entity_field} rows go with them by cascade. This is the one place the
+     * system deletes anything physically, and it is safe only because a device that could
+     * still be carrying an edit to one of these is, by the same cutoff, too far behind to
+     * be served incrementally and will be told to resync.
+     *
+     * <p>Accepted residual risk, stated rather than hidden: a device offline for longer
+     * than the retention window pushes its outbox <em>before</em> wiping for the resync, so
+     * an edit it queued against an entity whose tombstone has since been collected creates
+     * that entity afresh. That is a resurrection. It needs a device offline past the window
+     * holding an unpushed edit to an entity deleted before it went offline, and the
+     * alternative — retaining every tombstone forever — is the unbounded growth the
+     * retention window exists to stop.
+     *
+     * @return entities removed
+     */
+    public int deleteTombstonesOlderThan(UUID userId, java.time.Instant cutoff) {
+        return jdbc.update(
+                """
+                DELETE FROM entity
+                 WHERE user_id = ? AND deleted AND updated_at < ?
+                """,
+                userId,
+                java.sql.Timestamp.from(cutoff));
+    }
+
+    /**
      * Server-side snapshot of an entity, in the same shape as sync-core's
      * {@code EntityRecord} but with HLCs still in their compact string form.
      *
