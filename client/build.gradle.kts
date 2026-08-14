@@ -22,6 +22,10 @@ tasks.withType<JavaCompile>().configureEach {
 
 application {
     mainClass.set("dev.thompgt.habitsync.client.HabitCli")
+    // sqlite-jdbc unpacks and loads a native library, which is a restricted operation on
+    // modern JVMs. Granting it explicitly keeps four lines of warning off every command's
+    // output -- and the warning says it will become an error in a future release.
+    applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
 }
 
 dependencies {

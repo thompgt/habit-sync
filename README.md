@@ -56,6 +56,7 @@ sync-core/    Pure Java 17. No Spring. No Android. No ORM.
 
 server/       Spring Boot 3.5 + Postgres. Depends on sync-core.
 simulator/    The M6 convergence simulator. Pure JVM, no Docker.
+client/       Reference client: real HTTP transport, SQLite store, CLI.
 android/      Java Android client. Room + WorkManager. Depends on sync-core.
 ```
 
@@ -66,9 +67,10 @@ than by agreement.
 
 `SyncEngine` is the client half: it stamps local edits, pushes the outbox, pulls what the
 device missed, merges it, and moves the watermark. It has no I/O of its own — storage,
-network and clock are all injected — so it runs on a plain JVM against an in-process
-server, which is what M6 needs. What is *not* built is the on-device transport that
-speaks real HTTP; that ships with the Android client and is blocked behind M3.
+network and clock are all injected — so the same engine runs against the simulator's
+in-process network and against a real server over HTTP without knowing which it is talking
+to. `client/` supplies the real implementations of both seams; what remains unbuilt is the
+Android UI, which is blocked on there being no SDK on the build machine.
 
 The server and the client **run the same `MergeEngine`**. They cannot disagree about
 who won a conflict, because it is literally the same code path.
@@ -78,6 +80,7 @@ in-memory replicas driving the real engine over an in-process transport it can
 partition, delay, reorder, and duplicate at will — no emulator, no network, no mocks
 of the logic under test.
 
+<a id="losing-data-on-purpose-visibly"></a>
 ### Losing data on purpose, visibly
 
 Last-writer-wins loses writes. That is the deal, and both conflict ADRs accept it on one
@@ -139,6 +142,38 @@ concurrent editing is already enough to find broken conflict semantics.
 java -cp ... dev.thompgt.habitsync.sim.SeedSweep 0 1000   # a wider sweep, offline
 ```
 
+### Trying it, as two devices
+
+`client/` is a working client — a real HTTP transport and a durable SQLite store driving the
+same `SyncEngine` the Android app will. Two `--home` directories are two devices on one
+account, which is how the convergence behaviour can be watched without an emulator.
+
+```bash
+./gradlew :client:installDist
+CLI=client/build/install/client/bin/client
+
+$CLI --home /tmp/phone  register you@example.com hunter2hunter2 Phone
+$CLI --home /tmp/tablet login    you@example.com hunter2hunter2 Tablet
+
+# Works with the server switched off — writes land in SQLite and the outbox.
+$CLI --home /tmp/phone add Run --target 3 --colour red
+$CLI --home /tmp/phone sync
+$CLI --home /tmp/tablet sync
+
+# Now edit different fields of the same habit on each device, still offline...
+$CLI --home /tmp/phone  rename 7ebce150 Jog
+$CLI --home /tmp/tablet set    7ebce150 weeklyTarget 6
+$CLI --home /tmp/tablet set    7ebce150 colour -        # cleared, not absent
+
+# ...reconnect, and both devices agree, with every edit surviving.
+$CLI --home /tmp/phone sync && $CLI --home /tmp/tablet sync && $CLI --home /tmp/phone sync
+$CLI --home /tmp/tablet list
+```
+
+Per-row LWW would keep one device's changes and silently drop the other's. `sync` also prints
+what it discarded, including whether the losing write was this device's own — see
+[Losing data on purpose, visibly](#losing-data-on-purpose-visibly).
+
 ## Project status
 
 | Milestone | State |
@@ -146,7 +181,7 @@ java -cp ... dev.thompgt.habitsync.sim.SeedSweep 0 1000   # a wider sweep, offli
 | M0 — Scaffolding, build, CI, ADRs | ✅ done |
 | M1 — `sync-core` primitives (HLC, merge engine) | ✅ done — 47 tests, ~7k generated cases |
 | M2 — Server domain, schema, auth | ✅ done — 24 tests against real Postgres |
-| M3 — Android client, fully offline | ⬜ blocked (no Android SDK on dev machine) |
+| M3 — Android client, fully offline | 🟡 partial — `client/` proves the loop end to end; the Android UI is still blocked on no SDK |
 | M4 — Sync protocol v1 | ✅ done — 21 protocol tests on the server, 36 on the client |
 | M5 — Conflict semantics & hardening | ✅ done — losses reported to the client, skew rejected, retention collecting |
 | M6 — Deterministic convergence simulator | ✅ done — 15 tests; 240 seeds swept per CI run |
@@ -161,6 +196,7 @@ Gradle comes via the wrapper — no local install needed.
 ./gradlew build          # compile + test everything
 ./gradlew :sync-core:test    # fast: pure-JVM merge and HLC tests, no Docker
 ./gradlew :simulator:test    # fast: the convergence sweep, no Docker
+./gradlew :client:installDist  # the reference client CLI
 ```
 
 The Android module is intentionally absent from `settings.gradle.kts` until an SDK is

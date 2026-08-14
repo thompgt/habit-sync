@@ -30,6 +30,11 @@ dependencies {
     runtimeOnly(libs.jjwt.impl)
     runtimeOnly(libs.jjwt.jackson)
 
+    // Test-only, and deliberately pointing "backwards" from server to client. The end-to-end
+    // test needs both halves in one JVM, and this is the only place that is true: the server
+    // knows nothing about the client at compile time or at runtime.
+    testImplementation(project(":client"))
+
     testImplementation(libs.spring.boot.starter.test)
     testImplementation(libs.spring.security.test)
     testImplementation(libs.assertj.core)
