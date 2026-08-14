@@ -33,8 +33,9 @@ public final class Network {
 
     private final SimulatedServer server;
     private final SimRandom random;
-    private final FaultProfile faults;
     private final Set<String> partitioned = new LinkedHashSet<>();
+
+    private FaultProfile faults;
 
     private int delivered;
     private int requestsLost;
@@ -82,6 +83,22 @@ public final class Network {
     }
 
     // ------------------------------------------------------------ partitions
+
+    public FaultProfile faults() {
+        return faults;
+    }
+
+    /**
+     * Replaces the fault profile mid-run.
+     *
+     * <p>Used once, to turn the network perfect before the convergence check. Convergence is
+     * a claim about a settled system: asserting it while the wire is still dropping packets
+     * would be asserting that a finite number of retries beats an infinite fault stream,
+     * which is a statement about the fault rate rather than about the engine.
+     */
+    public void setFaults(FaultProfile replacement) {
+        this.faults = replacement;
+    }
 
     public boolean isPartitioned(String nodeId) {
         return partitioned.contains(nodeId);
