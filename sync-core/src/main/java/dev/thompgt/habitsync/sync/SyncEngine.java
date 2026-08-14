@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 /**
  * The client half of the sync protocol: stamp local edits, push them, pull what the
@@ -78,6 +79,7 @@ public final class SyncEngine {
     private final MergeEngine mergeEngine;
     private final int pushBatchSize;
     private final int maxPagesPerSync;
+    private final Supplier<UUID> opIds;
 
     public SyncEngine(HlcClock clock, LocalStore store, Transport transport) {
         this(clock, store, transport, new MergeEngine(), DEFAULT_PUSH_BATCH_SIZE, DEFAULT_MAX_PAGES_PER_SYNC);
@@ -90,10 +92,33 @@ public final class SyncEngine {
             MergeEngine mergeEngine,
             int pushBatchSize,
             int maxPagesPerSync) {
+        this(clock, store, transport, mergeEngine, pushBatchSize, maxPagesPerSync, UUID::randomUUID);
+    }
+
+    /**
+     * @param opIds source of op ids. Overridable for one reason: the M6 convergence
+     *              simulator must be able to replay a failing run exactly from its seed, and
+     *              {@link UUID#randomUUID()} is the one thing in the client path no seed can
+     *              reproduce. Nothing in the protocol orders by op id — the server keys
+     *              idempotency off it in a set, and merge decides by HLC alone — so a
+     *              substituted source changes what a run is called, never what it does.
+     *              Production has no reason to pass anything but the default; a source that
+     *              ever repeated a value would have the server treat a fresh op as a replay
+     *              and silently drop the write.
+     */
+    public SyncEngine(
+            HlcClock clock,
+            LocalStore store,
+            Transport transport,
+            MergeEngine mergeEngine,
+            int pushBatchSize,
+            int maxPagesPerSync,
+            Supplier<UUID> opIds) {
         this.clock = Objects.requireNonNull(clock, "clock");
         this.store = Objects.requireNonNull(store, "store");
         this.transport = Objects.requireNonNull(transport, "transport");
         this.mergeEngine = Objects.requireNonNull(mergeEngine, "mergeEngine");
+        this.opIds = Objects.requireNonNull(opIds, "opIds");
         if (pushBatchSize < 1) {
             throw new IllegalArgumentException("pushBatchSize must be >= 1, got " + pushBatchSize);
         }
@@ -141,7 +166,7 @@ public final class SyncEngine {
             // is full of no-ops.
             throw new IllegalArgumentException("An upsert must write at least one field");
         }
-        return applyLocally(Change.upsert(UUID.randomUUID(), type, entityId, clock.tick(), fields));
+        return applyLocally(Change.upsert(opIds.get(), type, entityId, clock.tick(), fields));
     }
 
     /** Convenience for the common single-field write. */
@@ -151,12 +176,12 @@ public final class SyncEngine {
 
     /** Tombstones an entity. It stops being {@link EntityRecord#visible()} immediately. */
     public Change delete(EntityType type, UUID entityId) {
-        return applyLocally(Change.delete(UUID.randomUUID(), type, entityId, clock.tick()));
+        return applyLocally(Change.delete(opIds.get(), type, entityId, clock.tick()));
     }
 
     /** Clears a tombstone — the user's explicit undo. */
     public Change restore(EntityType type, UUID entityId) {
-        return applyLocally(Change.restore(UUID.randomUUID(), type, entityId, clock.tick()));
+        return applyLocally(Change.restore(opIds.get(), type, entityId, clock.tick()));
     }
 
     private Change applyLocally(Change op) {

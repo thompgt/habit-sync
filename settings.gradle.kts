@@ -6,6 +6,10 @@ rootProject.name = "habit-sync"
 include("sync-core")
 include("server")
 
+// The M6 convergence simulator. Pure JVM, no Docker and no network, so it runs
+// everywhere sync-core does.
+include("simulator")
+
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
     repositories {
