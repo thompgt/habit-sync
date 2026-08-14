@@ -32,6 +32,12 @@ jobs:
       - name: sync-core tests
         run: ./gradlew :sync-core:test
 
+      # The M6 convergence sweep. Also pure JVM, and it runs before the server suite for
+      # the same reason: a merge that does not converge is a more fundamental failure than
+      # anything Testcontainers is about to report, and it takes seconds to find out.
+      - name: Convergence simulator
+        run: ./gradlew :simulator:test
+
       - name: Full build (server tests use Testcontainers)
         run: ./gradlew build
 

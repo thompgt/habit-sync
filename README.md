@@ -55,6 +55,7 @@ sync-core/    Pure Java 17. No Spring. No Android. No ORM.
               SyncEngine — behind LocalStore / Transport / TimeSource.
 
 server/       Spring Boot 3.5 + Postgres. Depends on sync-core.
+simulator/    The M6 convergence simulator. Pure JVM, no Docker.
 android/      Java Android client. Room + WorkManager. Depends on sync-core.
 ```
 
@@ -109,6 +110,35 @@ overlapping pushes the earlier-started one can take the higher sequence — dele
 punches a hole in the middle of the log instead of trimming its front, and a device below a
 hole passes the horizon check while permanently missing what is inside it.
 
+### The simulator, and how much it is worth
+
+`simulator/` runs N replicas of the **real** `SyncEngine` against an in-process server over a
+network it can partition, drop, duplicate and reorder — all of it driven by one `long` seed.
+A failing run is reported with that seed and a numbered history, and re-running the seed
+reproduces it byte for byte.
+
+The lost-**response** fault is the one that earns the whole thing: the server commits the push
+and the reply vanishes, so the client must retry and the server must recognise the replay.
+That path is nearly impossible to provoke against a real server and is where hand-rolled sync
+layers quietly duplicate or drop writes.
+
+A convergence suite that never fails proves nothing, so its detection power was measured
+rather than assumed. Two deliberate bugs were introduced into `MergeEngine` and the sweep run
+against each:
+
+| Mutation | Seeds failing (of 150, perfect network) |
+|---|---|
+| Discard field writes on tombstoned entities (couple the two register groups) | 136 |
+| Per-row instead of per-field LWW — the flaw ADR-001 exists to avoid | 145 |
+
+Both were caught with **no fault injection at all**. The faults widen coverage; ordinary
+concurrent editing is already enough to find broken conflict semantics.
+
+```bash
+./gradlew :simulator:test                          # the CI sweep, ~25s
+java -cp ... dev.thompgt.habitsync.sim.SeedSweep 0 1000   # a wider sweep, offline
+```
+
 ## Project status
 
 | Milestone | State |
@@ -119,7 +149,7 @@ hole passes the horizon check while permanently missing what is inside it.
 | M3 — Android client, fully offline | ⬜ blocked (no Android SDK on dev machine) |
 | M4 — Sync protocol v1 | ✅ done — 21 protocol tests on the server, 36 on the client |
 | M5 — Conflict semantics & hardening | ✅ done — losses reported to the client, skew rejected, retention collecting |
-| M6 — Deterministic convergence simulator | ⬜ |
+| M6 — Deterministic convergence simulator | ✅ done — 15 tests; 240 seeds swept per CI run |
 | M7 — Multi-device UX & observability | ⬜ |
 
 ## Build
@@ -130,6 +160,7 @@ Gradle comes via the wrapper — no local install needed.
 ```bash
 ./gradlew build          # compile + test everything
 ./gradlew :sync-core:test    # fast: pure-JVM merge and HLC tests, no Docker
+./gradlew :simulator:test    # fast: the convergence sweep, no Docker
 ```
 
 The Android module is intentionally absent from `settings.gradle.kts` until an SDK is
