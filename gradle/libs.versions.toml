@@ -7,10 +7,18 @@ junit = "5.12.2"
 assertj = "3.27.3"
 jqwik = "1.9.3"
 jjwt = "0.12.6"
+# Pinned explicitly because the client module has no Spring BOM to inherit it from.
+# Keep in step with whatever Spring Boot resolves on the server, or the two ends of the
+# protocol can differ about how a record with a null map value round-trips.
+jackson = "2.19.0"
+sqlite = "3.49.1.0"
 
 [libraries]
 # --- sync-core (no framework dependencies by design) ---
-jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind" }
+jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
+
+# --- client ---
+sqlite-jdbc = { module = "org.xerial:sqlite-jdbc", version.ref = "sqlite" }
 
 # --- server ---
 spring-boot-starter-web = { module = "org.springframework.boot:spring-boot-starter-web" }

@@ -10,6 +10,11 @@ include("server")
 // everywhere sync-core does.
 include("simulator")
 
+// The JVM reference client: real HTTP, real durable storage. Unblocks the end-to-end
+// offline -> reconnect -> converge loop without an Android SDK, and is the module the
+// Android client will reuse everything but the UI from.
+include("client")
+
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
     repositories {
