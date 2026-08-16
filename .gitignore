@@ -38,3 +38,11 @@ Thumbs.db
 .env
 .env.local
 *.pem
+
+# iOS / SwiftPM
+ios/.build/
+ios/.swiftpm/
+ios/*.xcodeproj/
+ios/*.xcworkspace/
+DerivedData/
+*.xcuserstate

@@ -1,0 +1,46 @@
+# XcodeGen spec for the app target.
+#
+# The project file itself is not checked in. An .xcodeproj is a generated artefact that
+# conflicts on every merge and records absolute paths and personal team ids; this spec is the
+# reviewable source it comes from. Regenerate with:
+#
+#   brew install xcodegen && cd ios && xcodegen generate && open HabitSync.xcodeproj
+#
+# The libraries are consumed as a local Swift package, so `swift build` and `swift test` work
+# from a terminal with no Xcode project at all — which is how the core suite is meant to run.
+name: HabitSync
+options:
+  bundleIdPrefix: dev.thompgt.habitsync
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+packages:
+  HabitSync:
+    path: .
+
+targets:
+  HabitSync:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+    info:
+      path: App/Info.plist
+    dependencies:
+      - package: HabitSync
+        product: HabitSyncUI
+      - package: HabitSync
+        product: HabitSyncClient
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.thompgt.habitsync
+        PRODUCT_NAME: HabitSync
+        GENERATE_INFOPLIST_FILE: NO
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        # Left at the default -Onone/-O split. Note the sync layer asserts its invariants with
+        # precondition rather than assert, so they stay live in release builds — the failures
+        # they catch (a record whose fields and clocks disagree, a node id containing the HLC
+        # separator) corrupt replicated state, and carrying on past one would push the
+        # corruption to every other device on the account.
