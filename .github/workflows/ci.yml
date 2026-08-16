@@ -55,3 +55,22 @@ jobs:
       - uses: actions/checkout@v7
       - name: Build server image
         run: docker build -f server/Dockerfile -t habit-sync-server:ci .
+
+  # The iOS client's library targets and their tests. macOS rather than Linux because
+  # HabitSyncClient uses the system SQLite module and the Keychain, neither of which exists
+  # on the Linux toolchain; the screens themselves are compiled out with `#if os(iOS)` so
+  # this job builds and tests the parts that hold the invariants.
+  ios:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Swift version
+        run: swift --version
+
+      # The port is only worth having if it decides conflicts identically to sync-core, so
+      # these are the JVM suite's assertions in Swift: HLC ordering, merge's three algebraic
+      # properties, the codec's null handling, and the round-trip loop against a fake server.
+      - name: HabitSyncCore and HabitSyncClient tests
+        working-directory: ios
+        run: swift test
