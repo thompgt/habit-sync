@@ -13,6 +13,7 @@ import SwiftUI
 /// It is deliberately limited to losses this device authored. A write another replica lost to
 /// a value this device already held is real, but interrupting someone over it would train them
 /// to dismiss the notice that matters. Those live in the sync screen instead.
+@MainActor
 struct ConflictNoticeView: View {
 
     let conflicts: [Conflict]

@@ -37,12 +37,16 @@ public final class HTTPTransport: Transport, @unchecked Sendable {
 
     private static let requestTimeout: TimeInterval = 30
 
-    private let baseURL: URL
+    /// Kept as text rather than a `URL`, deliberately. The server address is typed by the user
+    /// on the sign-in screen, and `URL(string:)!` on that input is a crash on a typo — whereas
+    /// building the URL per request turns the same typo into a non-retryable transport failure
+    /// the app can show.
+    private let baseURL: String
     private let session: Session
     private let urlSession: URLSession
 
     public init(baseURL: String, session: Session, urlSession: URLSession? = nil) {
-        self.baseURL = URL(string: HTTPTransport.trimSlash(baseURL))!
+        self.baseURL = HTTPTransport.trimSlash(baseURL)
         self.session = session
         self.urlSession = urlSession ?? HTTPTransport.defaultURLSession()
     }
@@ -219,8 +223,8 @@ public final class HTTPTransport: Transport, @unchecked Sendable {
     private func sendOnce<Body: Encodable>(
         path: String, body: Body, authenticated: Bool
     ) async throws -> (Data, Int) {
-        guard let url = URL(string: baseURL.absoluteString + path) else {
-            throw TransportError("\(baseURL)\(path) is not a usable URL", retryable: false)
+        guard let url = URL(string: baseURL + path) else {
+            throw TransportError("\(baseURL)\(path) is not a usable server address", retryable: false)
         }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"

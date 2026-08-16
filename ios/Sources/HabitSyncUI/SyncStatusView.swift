@@ -10,6 +10,7 @@ import SwiftUI
 /// numbers at the top — watermark, outbox depth, clock — are the same three the reference
 /// CLI's `status` prints, and they are the first three questions worth asking when two devices
 /// disagree.
+@MainActor
 struct SyncStatusView: View {
 
     @Environment(AppModel.self) private var model
@@ -116,6 +117,7 @@ struct SyncStatusView: View {
 }
 
 /// One conflict, phrased for the person who lost the work rather than for the engine.
+@MainActor
 struct ConflictRow: View {
     let conflict: Conflict
 
@@ -154,6 +156,7 @@ struct ConflictRow: View {
 /// Restoring is an explicit user action and nothing else — a tombstone is never lifted as a
 /// side effect of a later edit arriving, which is what makes deletes stay deleted while
 /// leaving them reversible.
+@MainActor
 struct DeletedHabitsView: View {
 
     @Environment(AppModel.self) private var model

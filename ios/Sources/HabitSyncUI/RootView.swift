@@ -7,6 +7,7 @@ import SwiftUI
 #if os(iOS)
 
 /// The app's one entry point: decides between sign-in and the habit list, and owns the model.
+@MainActor
 public struct RootView: View {
 
     @State private var model = AppModel()
@@ -49,6 +50,7 @@ public struct RootView: View {
 /// Its own screen rather than an alert over an empty list, because nothing in the app works
 /// without it and an empty habit list would read as "you have no habits" — which, for someone
 /// whose disk is full, is a lie about their data.
+@MainActor
 struct UnusableStoreView: View {
     let detail: String
 

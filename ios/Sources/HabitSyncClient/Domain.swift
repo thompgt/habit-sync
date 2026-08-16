@@ -46,7 +46,7 @@ public struct Habit: Identifiable, Hashable, Sendable {
         guard record.type == .habit else { return nil }
         id = record.id
         name = record.field(HabitField.name)?.raw ?? ""
-        weeklyTarget = record.field(HabitField.weeklyTarget)?.raw.flatMap(Int.init)
+        weeklyTarget = record.field(HabitField.weeklyTarget)?.raw.flatMap { Int($0) }
         colour = record.field(HabitField.colour)?.raw
         isDeleted = record.deleted
     }

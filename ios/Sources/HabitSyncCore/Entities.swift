@@ -83,9 +83,10 @@ public struct FieldValue: Hashable, Sendable, CustomStringConvertible {
 
     public static func of(_ raw: String?) -> FieldValue { FieldValue(raw) }
 
+    /// Deliberately `Int64` only, with no `Int` companion. Two overloads differing only in
+    /// integer width make `FieldValue.of(4)` ambiguous at every call site, and the fix people
+    /// reach for — annotating the literal — is worse than requiring the conversion here.
     public static func of(_ value: Int64) -> FieldValue { FieldValue(String(value)) }
-
-    public static func of(_ value: Int) -> FieldValue { FieldValue(String(value)) }
 
     public static func of(_ value: Bool) -> FieldValue { FieldValue(value ? "true" : "false") }
 

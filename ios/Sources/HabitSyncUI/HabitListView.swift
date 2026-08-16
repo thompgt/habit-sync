@@ -4,6 +4,7 @@ import SwiftUI
 #if os(iOS)
 
 /// The main screen: this week's habits, their progress, and one tap to log a completion.
+@MainActor
 struct HabitListView: View {
 
     @Environment(AppModel.self) private var model
@@ -100,6 +101,7 @@ struct HabitListView: View {
 }
 
 /// One habit: its colour, name, this week's progress, and the log button.
+@MainActor
 struct HabitRow: View {
 
     @Environment(AppModel.self) private var model

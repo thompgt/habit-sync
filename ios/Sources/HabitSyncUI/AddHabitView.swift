@@ -3,6 +3,7 @@ import SwiftUI
 #if os(iOS)
 
 /// Creating a habit. Saves locally and dismisses — the network is not involved.
+@MainActor
 struct AddHabitView: View {
 
     @Environment(AppModel.self) private var model
@@ -60,6 +61,7 @@ struct AddHabitView: View {
 /// "None" matters here: no colour and a cleared colour are different states in the store, and
 /// a picker that could only ever set a value would leave the clear path unreachable from the
 /// app.
+@MainActor
 struct ColourPicker: View {
     @Binding var selection: String?
 
@@ -75,7 +77,7 @@ struct ColourPicker: View {
 
     private func swatch(_ name: String?) -> some View {
         Circle()
-            .fill(name == nil ? Color(uiColor: .systemGray5) : HabitPalette.color(named: name))
+            .fill(name == nil ? Color.secondary.opacity(0.2) : HabitPalette.color(named: name))
             .frame(width: 26, height: 26)
             .overlay {
                 if selection == name {

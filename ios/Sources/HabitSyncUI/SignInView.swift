@@ -9,6 +9,7 @@ import UIKit
 /// of a system whose whole point is watching two devices converge, and pointing a phone at a
 /// laptop running the server is the demonstration — hiding that behind a rebuild would make
 /// the interesting case the hard one.
+@MainActor
 struct SignInView: View {
 
     @Environment(AppModel.self) private var model

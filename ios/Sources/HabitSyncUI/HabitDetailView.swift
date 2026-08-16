@@ -9,6 +9,7 @@ import SwiftUI
 /// "Save" that writes them all. That mirrors what the merge engine does with them — each field
 /// is an independent register — so a rename made here and a target change made on another
 /// device both survive instead of one silently overwriting the other's untouched fields.
+@MainActor
 struct HabitDetailView: View {
 
     @Environment(AppModel.self) private var model
