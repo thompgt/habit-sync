@@ -57,6 +57,8 @@ sync-core/    Pure Java 17. No Spring. No Android. No ORM.
 server/       Spring Boot 3.5 + Postgres. Depends on sync-core.
 simulator/    The M6 convergence simulator. Pure JVM, no Docker.
 client/       Reference client: real HTTP transport, SQLite store, CLI.
+ios/          Native SwiftUI client. Swift port of sync-core, SQLite store,
+              URLSession transport, Keychain session.
 android/      Java Android client. Room + WorkManager. Depends on sync-core.
 ```
 
@@ -69,8 +71,19 @@ than by agreement.
 device missed, merges it, and moves the watermark. It has no I/O of its own — storage,
 network and clock are all injected — so the same engine runs against the simulator's
 in-process network and against a real server over HTTP without knowing which it is talking
-to. `client/` supplies the real implementations of both seams; what remains unbuilt is the
-Android UI, which is blocked on there being no SDK on the build machine.
+to. `client/` supplies the real implementations of both seams; `ios/` supplies a second,
+native set of them.
+
+`ios/` is the one place the shared-code property does not hold, because a phone cannot run
+the JVM engine. The merge rule therefore exists twice, and what keeps the copies honest is
+that `HabitSyncCore` is a line-by-line port whose tests are this suite's tests, and whose
+wire encoding is asserted as bytes rather than as a round trip. The three translations
+that would silently diverge — the `nodeId` tiebreak, the logical counter's 32-bit bound,
+and Swift's habit of deleting a dictionary key when you assign nil to it — are called out
+where they happen. See [`ios/README.md`](ios/README.md).
+
+What remains unbuilt is the Android UI, which is blocked on there being no SDK on the
+build machine.
 
 The server and the client **run the same `MergeEngine`**. They cannot disagree about
 who won a conflict, because it is literally the same code path.
@@ -181,7 +194,7 @@ what it discarded, including whether the losing write was this device's own — 
 | M0 — Scaffolding, build, CI, ADRs | ✅ done |
 | M1 — `sync-core` primitives (HLC, merge engine) | ✅ done — 47 tests, ~7k generated cases |
 | M2 — Server domain, schema, auth | ✅ done — 24 tests against real Postgres |
-| M3 — Android client, fully offline | 🟡 partial — `client/` proves the loop end to end; the Android UI is still blocked on no SDK |
+| M3 — Mobile client, fully offline | 🟡 partial — `ios/` is a full native client (unbuilt: no Mac on the dev machine); `client/` proves the loop end to end; Android is still blocked on no SDK |
 | M4 — Sync protocol v1 | ✅ done — 21 protocol tests on the server, 36 on the client |
 | M5 — Conflict semantics & hardening | ✅ done — losses reported to the client, skew rejected, retention collecting |
 | M6 — Deterministic convergence simulator | ✅ done — 15 tests; 240 seeds swept per CI run |
@@ -201,6 +214,16 @@ Gradle comes via the wrapper — no local install needed.
 
 The Android module is intentionally absent from `settings.gradle.kts` until an SDK is
 present, so `sync-core` and `server` build on any plain JDK — including CI.
+
+The iOS client is a separate Swift package and is not part of the Gradle build. Its
+library targets and their tests need only a Swift toolchain:
+
+```bash
+cd ios && swift test    # HLC, merge, codec and sync-engine suites — no simulator
+```
+
+CI runs that on a macOS runner. The app itself needs Xcode; see
+[`ios/README.md`](ios/README.md).
 
 ## Design decisions
 
